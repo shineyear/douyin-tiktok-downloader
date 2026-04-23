@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="robots" content="index, follow">
+  <title id="pageTitle">视频下载 · Douyin &amp; TikTok Video Downloader</title>
+  <meta id="metaDesc" name="description" content="抖音 / TikTok 视频无水印下载 — 粘贴分享链接，一键保存到手机相册。Free no-watermark Douyin / TikTok video downloader, save straight to Photos on iPhone.">
+  <meta name="keywords" content="抖音下载,TikTok下载,无水印视频下载,douyin downloader,tiktok downloader,save tiktok video,douyin mp4">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="author" content="Digital Dialogue">
+
+  <link rel="canonical" id="canonical" href="https://digitaldialogue.com.au/">
+  <meta property="og:site_name" content="Digital Dialogue">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://digitaldialogue.com.au/">
+  <meta id="ogTitle" property="og:title" content="Douyin & TikTok Video Downloader">
+  <meta id="ogDesc" property="og:description" content="Paste a Douyin or TikTok share link, save the watermark-free MP4 straight to your Camera Roll.">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:locale:alternate" content="en_US">
+  <meta property="og:locale:alternate" content="ja_JP">
+  <meta property="og:locale:alternate" content="es_ES">
+  <meta name="twitter:card" content="summary">
+  <meta id="twTitle" name="twitter:title" content="Douyin & TikTok Video Downloader">
+  <meta id="twDesc" name="twitter:description" content="Paste a share link, save the watermark-free MP4 straight to your Camera Roll.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Douyin & TikTok Video Downloader",
+    "url": "https://digitaldialogue.com.au/",
+    "applicationCategory": "MultimediaApplication",
+    "operatingSystem": "iOS, Android, Web",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "description": "Paste a Douyin or TikTok share link and save the watermark-free MP4 straight to your phone's photo album.",
+    "inLanguage": ["zh-CN", "en", "ja", "es"],
+    "publisher": { "@type": "Organization", "name": "Digital Dialogue", "url": "https://digitaldialogue.com.au/" }
+  }
+  </script>
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E">
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      min-height: 100vh;
+      padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px);
+      max-width: 540px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 8px 0;
+    }
+    .lang-btn {
+      padding: 6px 12px;
+      background: transparent;
+      color: #aaa;
+      border: 1px solid #333;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+    .lang-btn:active { background: #222; }
+    h1 { font-size: 22px; margin: 8px 0 6px; text-align: center; font-weight: 700; }
+    .sub { font-size: 13px; color: #888; text-align: center; margin: 0 0 20px; line-height: 1.5; }
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #2a2a2a;
+      background: #141414;
+      color: #fff;
+      font-size: 15px;
+      line-height: 1.5;
+      resize: none;
+      -webkit-appearance: none;
+      font-family: inherit;
+    }
+    textarea:focus { outline: none; border-color: #ff0050; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    .row button { flex: 1; }
+    button {
+      padding: 14px;
+      border: 0;
+      border-radius: 10px;
+      background: #ff0050;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+    button.secondary { background: #262626; color: #ddd; }
+    button:disabled { background: #3a3a3a; color: #888; }
+    .result { margin-top: 24px; }
+    video {
+      width: 100%;
+      border-radius: 10px;
+      background: #000;
+      display: block;
+    }
+    .title { margin-top: 12px; font-size: 14px; color: #ddd; line-height: 1.5; word-break: break-word; }
+    .platform-tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .tag-douyin { background: #ff0050; color: #fff; }
+    .tag-tiktok { background: #25f4ee; color: #000; }
+    .tip {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: #141414;
+      border-radius: 10px;
+      font-size: 13px;
+      color: #ccc;
+      line-height: 1.6;
+    }
+    .save-btn {
+      display: block;
+      width: 100%;
+      margin-top: 14px;
+      padding: 14px;
+      border: 0;
+      border-radius: 10px;
+      background: #ff0050;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+    .save-btn:disabled { background: #3a3a3a; color: #888; }
+    .backup {
+      display: block;
+      margin-top: 10px;
+      text-align: center;
+      color: #888;
+      font-size: 13px;
+      text-decoration: underline;
+    }
+    .progress {
+      margin-top: 10px;
+      height: 4px;
+      background: #262626;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress > span {
+      display: block;
+      height: 100%;
+      background: #ff0050;
+      width: 0%;
+      transition: width .15s;
+    }
+    .error {
+      margin-top: 16px;
+      padding: 12px 14px;
+      background: #2a0d12;
+      border-radius: 10px;
+      color: #ff8a9b;
+      font-size: 14px;
+    }
+    .loading {
+      margin-top: 16px;
+      text-align: center;
+      color: #888;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="lang-btn" id="langToggle">EN</button>
+  </header>
+
+  <h1 data-i18n="title">视频下载</h1>
+  <p class="sub" data-i18n="subtitle">粘贴抖音 / TikTok 分享链接 · 长按视频存到相册</p>
+
+  <textarea id="input" data-i18n-attr="placeholder" data-i18n="placeholder"></textarea>
+
+  <div class="row">
+    <button class="secondary" id="clear" data-i18n="clear">清除</button>
+    <button id="go" data-i18n="parse">解析</button>
+  </div>
+
+  <div id="result" class="result"></div>
+
+<script>
+  const I18N = {
+    zh: {
+      html_lang: 'zh-CN',
+      og_locale: 'zh_CN',
+      seoTitle: '抖音 / TikTok 视频无水印下载 · Digital Dialogue',
+      seoDesc: '粘贴抖音或 TikTok 分享链接，一键保存无水印 MP4 到手机相册。免费、无需登录、无广告。',
+      title: '视频下载',
+      subtitle: '粘贴抖音 / TikTok 分享链接 → 保存到相册',
+      placeholder: '长按此处 → 粘贴\n\n抖音：https://v.douyin.com/xxxxx/\nTikTok：https://www.tiktok.com/@user/video/123',
+      parse: '解析',
+      clear: '清除',
+      parsing: '解析中...',
+      loading: '正在解析，请稍候...',
+      tipIOS: '📱 点下方 <b>保存到相册</b> → 分享面板选 "储存视频"',
+      tipOther: '📱 点下方按钮直接下载到手机',
+      save: '💾 保存到相册',
+      downloading: '⏳ 视频下载中',
+      backup: '或点此在新标签打开 MP4',
+      retry: '❌ 下载失败，点击重试',
+      shareOpened: '✓ 已保存',
+      cancelled: '已取消，再点一次可重试',
+      notAllowed: '⚠️ 再点一次保存',
+      shareFailed: '❌ 分享失败',
+      downloaded: '✓ 已下载',
+      notReady: '视频还未就绪，请稍候',
+      parseFailed: '解析失败',
+      errorPrefix: '错误：',
+    },
+    en: {
+      html_lang: 'en',
+      og_locale: 'en_US',
+      seoTitle: 'Douyin & TikTok Video Downloader — Save to Photos · Digital Dialogue',
+      seoDesc: 'Paste a Douyin or TikTok share link and save the watermark-free MP4 straight to your iPhone Camera Roll or Android gallery. Free, no sign-up.',
+      title: 'Video Downloader',
+      subtitle: 'Paste a Douyin / TikTok share link → save to Photos',
+      placeholder: 'Long-press here → Paste\n\nDouyin: https://v.douyin.com/xxxxx/\nTikTok: https://www.tiktok.com/@user/video/123',
+      parse: 'Parse',
+      clear: 'Clear',
+      parsing: 'Parsing...',
+      loading: 'Parsing, please wait...',
+      tipIOS: '📱 Tap <b>Save to Photos</b> → native share sheet → "Save Video"',
+      tipOther: '📱 Tap the button to download to your phone',
+      save: '💾 Save to Photos',
+      downloading: '⏳ Downloading',
+      backup: 'Or open MP4 in a new tab',
+      retry: '❌ Download failed, tap to retry',
+      shareOpened: '✓ Saved',
+      cancelled: 'Cancelled — tap again to retry',
+      notAllowed: '⚠️ Tap once more to save',
+      shareFailed: '❌ Share failed',
+      downloaded: '✓ Downloaded',
+      notReady: 'Video not ready yet',
+      parseFailed: 'Parse failed',
+      errorPrefix: 'Error: ',
+    },
+    ja: {
+      html_lang: 'ja',
+      og_locale: 'ja_JP',
+      seoTitle: '抖音 / TikTok 動画ダウンロード・写真に保存 · Digital Dialogue',
+      seoDesc: '抖音や TikTok の共有リンクを貼り付けるだけで、透かしなしの MP4 を iPhone の写真アプリにそのまま保存。無料・登録不要。',
+      title: '動画ダウンロード',
+      subtitle: '抖音 / TikTok の共有リンクを貼り付け → 写真に保存',
+      placeholder: 'ここを長押し → ペースト\n\n抖音: https://v.douyin.com/xxxxx/\nTikTok: https://www.tiktok.com/@user/video/123',
+      parse: '解析',
+      clear: 'クリア',
+      parsing: '解析中...',
+      loading: '解析しています...',
+      tipIOS: '📱 下の <b>写真に保存</b> → 共有メニューで「ビデオを保存」',
+      tipOther: '📱 下のボタンで直接ダウンロード',
+      save: '💾 写真に保存',
+      downloading: '⏳ ダウンロード中',
+      backup: 'または新しいタブで MP4 を開く',
+      retry: '❌ ダウンロード失敗、タップして再試行',
+      shareOpened: '✓ 共有メニューを開きました',
+      cancelled: 'キャンセル — もう一度タップで再試行',
+      notAllowed: '⚠️ もう一度タップして保存',
+      shareFailed: '❌ 共有失敗',
+      downloaded: '✓ ダウンロード完了',
+      notReady: '動画がまだ準備できていません',
+      parseFailed: '解析に失敗しました',
+      errorPrefix: 'エラー：',
+    },
+    es: {
+      html_lang: 'es',
+      og_locale: 'es_ES',
+      seoTitle: 'Descargar Vídeos de Douyin y TikTok · Guardar en Fotos · Digital Dialogue',
+      seoDesc: 'Pega un enlace de Douyin o TikTok y guarda el MP4 sin marca de agua directamente en Fotos de tu iPhone o galería de Android. Gratis, sin registro.',
+      title: 'Descargar Video',
+      subtitle: 'Pega un enlace de Douyin / TikTok → guarda en Fotos',
+      placeholder: 'Mantén presionado aquí → Pegar\n\nDouyin: https://v.douyin.com/xxxxx/\nTikTok: https://www.tiktok.com/@user/video/123',
+      parse: 'Analizar',
+      clear: 'Limpiar',
+      parsing: 'Analizando...',
+      loading: 'Analizando, espera...',
+      tipIOS: '📱 Toca <b>Guardar en Fotos</b> → hoja de compartir → "Guardar vídeo"',
+      tipOther: '📱 Toca el botón para descargar al teléfono',
+      save: '💾 Guardar en Fotos',
+      downloading: '⏳ Descargando',
+      backup: 'O abrir MP4 en nueva pestaña',
+      retry: '❌ Descarga fallida, toca para reintentar',
+      shareOpened: '✓ Hoja de compartir abierta',
+      cancelled: 'Cancelado — toca otra vez para reintentar',
+      notAllowed: '⚠️ Toca una vez más para guardar',
+      shareFailed: '❌ Compartir falló',
+      downloaded: '✓ Descargado',
+      notReady: 'El vídeo aún no está listo',
+      parseFailed: 'Análisis fallido',
+      errorPrefix: 'Error: ',
+    }
+  };
+
+  const LANG_ORDER = ['zh', 'en', 'ja', 'es'];
+  const LANG_LABEL = { zh: '中文', en: 'EN', ja: '日本語', es: 'Español' };
+
+  function detectDefaultLang() {
+    const l = navigator.language.toLowerCase();
+    if (l.startsWith('zh')) return 'zh';
+    if (l.startsWith('ja')) return 'ja';
+    if (l.startsWith('es')) return 'es';
+    return 'en';
+  }
+
+  // Language resolution priority: ?lang= query param > localStorage > browser.
+  // Query param lets users bookmark per-language URLs like ?lang=ja.
+  const urlLang = new URLSearchParams(location.search).get('lang');
+  let lang = (urlLang && LANG_ORDER.includes(urlLang))
+    ? urlLang
+    : (localStorage.getItem('lang') || detectDefaultLang());
+
+  function t(key) { return I18N[lang][key] || key; }
+
+  function applyLang() {
+    const entry = I18N[lang];
+    document.documentElement.lang = entry.html_lang;
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      const attr = el.getAttribute('data-i18n-attr');
+      if (attr) el.setAttribute(attr, t(key));
+      else el.textContent = t(key);
+    });
+
+    // SEO: title + description + OG/Twitter tags track the current language
+    document.getElementById('pageTitle').textContent = entry.seoTitle;
+    document.getElementById('metaDesc').setAttribute('content', entry.seoDesc);
+    document.getElementById('ogTitle').setAttribute('content', entry.seoTitle);
+    document.getElementById('ogDesc').setAttribute('content', entry.seoDesc);
+    document.getElementById('twTitle').setAttribute('content', entry.seoTitle);
+    document.getElementById('twDesc').setAttribute('content', entry.seoDesc);
+    const ogLocale = document.querySelector('meta[property="og:locale"]');
+    if (ogLocale) ogLocale.setAttribute('content', entry.og_locale);
+    const canonical = document.getElementById('canonical');
+    if (canonical) canonical.href = `${location.origin}${location.pathname}?lang=${lang}`;
+
+    document.getElementById('langToggle').textContent = LANG_LABEL[lang];
+    localStorage.setItem('lang', lang);
+
+    // Keep URL in sync so the current-language page is bookmarkable.
+    const params = new URLSearchParams(location.search);
+    params.set('lang', lang);
+    history.replaceState(null, '', location.pathname + '?' + params.toString());
+
+    // Hreflang tags for SEO — Google uses these to serve the right language.
+    document.querySelectorAll('link[rel=alternate][data-i18n-link]').forEach(el => el.remove());
+    const base = location.origin + location.pathname;
+    LANG_ORDER.forEach(l => {
+      const link = document.createElement('link');
+      link.rel = 'alternate';
+      link.hreflang = I18N[l].html_lang;
+      link.href = `${base}?lang=${l}`;
+      link.dataset.i18nLink = '1';
+      document.head.appendChild(link);
+    });
+  }
+
+  // Cycles zh → en → ja → es → zh. Label always shows CURRENT language;
+  // tap to move to the next one.
+  document.getElementById('langToggle').onclick = () => {
+    const i = LANG_ORDER.indexOf(lang);
+    lang = LANG_ORDER[(i + 1) % LANG_ORDER.length];
+    applyLang();
+  };
+  applyLang();
+
+  const input = document.getElementById('input');
+  const go = document.getElementById('go');
+  const clearBtn = document.getElementById('clear');
+  const result = document.getElementById('result');
+
+  // Holds the pre-downloaded File so the "save" click can call
+  // navigator.share() SYNCHRONOUSLY and keep Safari's transient user
+  // activation alive. Without this, awaiting a large fetch inside the
+  // click handler expires the activation and share() throws NotAllowedError.
+  let videoState = { file: null, error: null };
+
+  clearBtn.onclick = () => {
+    input.value = '';
+    result.innerHTML = '';
+    videoState = { file: null, error: null };
+    input.focus();
+  };
+
+  go.onclick = async () => {
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+
+    go.disabled = true;
+    clearBtn.disabled = true;
+    go.textContent = t('parsing');
+    result.innerHTML = `<div class="loading">${t('loading')}</div>`;
+    videoState = { file: null, error: null };
+
+    try {
+      const resp = await fetch('/.netlify/functions/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: text })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || t('parseFailed'));
+
+      const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      const tip = isIOS ? t('tipIOS') : t('tipOther');
+      const platform = data.platform || 'douyin';
+      const tag = platform === 'tiktok'
+        ? '<span class="platform-tag tag-tiktok">TikTok</span>'
+        : '<span class="platform-tag tag-douyin">抖音</span>';
+      const filename = `${platform}_${data.item_id || data.video_id || Date.now()}.mp4`;
+
+      result.innerHTML = `
+        <video controls playsinline preload="metadata" poster="${data.cover || ''}"
+               src="${data.video_url}"></video>
+        <div class="title">${tag}${escapeHtml(data.title || '')}</div>
+        <div class="tip">${tip}</div>
+        <button class="save-btn" id="save" data-src="${data.video_url}" data-name="${filename}" disabled>${t('downloading')} 0%</button>
+        <div class="progress" id="progress"><span></span></div>
+        <a class="backup" href="${data.video_url}" target="_blank" rel="noopener">${t('backup')}</a>
+      `;
+
+      document.getElementById('save').onclick = onSaveClick;
+      prefetchVideo(data.video_url, filename);
+    } catch (err) {
+      result.innerHTML = `<div class="error">${t('errorPrefix')}${escapeHtml(err.message)}</div>`;
+    } finally {
+      go.disabled = false;
+      clearBtn.disabled = false;
+      go.textContent = t('parse');
+    }
+  };
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  async function prefetchVideo(src, name) {
+    videoState = { file: null, error: null };
+    const btn = document.getElementById('save');
+    const bar = document.getElementById('progress').querySelector('span');
+
+    try {
+      const resp = await fetch(src);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const total = +resp.headers.get('Content-Length') || 0;
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total && btn) {
+          const pct = Math.round(received / total * 100);
+          bar.style.width = pct + '%';
+          btn.textContent = `${t('downloading')} ${pct}%`;
+        }
+      }
+      const blob = new Blob(chunks, { type: 'video/mp4' });
+      videoState.file = new File([blob], name, { type: 'video/mp4' });
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = t('save');
+        // Download done — hide the progress track entirely so it doesn't
+        // look like a stray red line under the button.
+        const prog = document.getElementById('progress');
+        if (prog) prog.hidden = true;
+      }
+    } catch (err) {
+      videoState.error = err;
+      if (btn) {
+        btn.textContent = t('retry');
+        btn.disabled = false;
+        btn.dataset.retry = '1';
+      }
+    }
+  }
+
+  function onSaveClick(ev) {
+    const btn = ev.currentTarget;
+
+    if (btn.dataset.retry === '1') {
+      btn.dataset.retry = '';
+      prefetchVideo(btn.dataset.src, btn.dataset.name);
+      return;
+    }
+
+    const file = videoState.file;
+    if (!file) { alert(t('notReady')); return; }
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file] }).then(() => {
+        btn.textContent = t('shareOpened');
+      }).catch((err) => {
+        if (err.name === 'AbortError') btn.textContent = t('cancelled');
+        else if (err.name === 'NotAllowedError') btn.textContent = t('notAllowed');
+        else { btn.textContent = t('shareFailed'); alert(err.message); }
+      });
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    btn.textContent = t('downloaded');
+  }
+</script>
+</body>
+</html>
