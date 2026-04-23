@@ -72,19 +72,29 @@ The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redi
   <img src="screenshots/ios-shortcut.jpg" width="320" alt="iOS Shortcut configuration">
 </p>
 
-Build a 4-action Shortcut exactly as shown above. On iPhone: open the **Shortcuts** app → tap **+** → add these actions in order:
+Build a 4-action Shortcut exactly as shown above. On iPhone: open the **Shortcuts** app → tap **+** to create a new Shortcut.
 
-**1. Receive `Text` from Share Sheet**
+#### First: enable it in the Share Sheet (this is NOT an action)
+
+Tap the **ⓘ info icon** at the bottom of the editor → toggle **Show in Share Sheet** on → for **Share Sheet Types** keep **only Text** checked and uncheck everything else (including URLs). Name it e.g. *Save to Photos*.
+
+> ⚠️ This is a gotcha — "Receive Input" is a Shortcut **setting**, not an action you can search for. If you skip it, the Shortcut won't appear in Douyin's share menu.
+>
+> ⚠️ **Accept Text, not URLs.** Douyin's share blob looks like `8.97 复制打开抖音… https://v.douyin.com/XXXX/ S@Y.MW YMW:/ 12/07`. If you accept URLs, iOS auto-extracts `S@Y.MW` as `mailto:S@Y.MW` and you'll hit the error *"URL is missing a hostname"* before your actions even run.
+
+#### Then: add these 4 actions in order
+
+**1. Receive Text from Share Sheet**
 - Action: *Receive input from Share Sheet*
-- Accept: **Text** (uncheck the other types)
-- If there's no input: **Get Clipboard** (so it also works when you copy a share link instead of using the share button)
+- Type: **Text**
+- If there's no input: **Get Clipboard** (so it also works when you copy a share link instead of tapping Share)
 
-**2. Match Text with Regular Expression**
+**2. Match Text** (this is where the URL gets extracted)
 - Action: *Match Text*
 - Pattern: `https:\/\/v\.douyin\.com\/[A-Za-z0-9\/?=_-]+`
 - Input: **Shortcut Input**
 
-Douyin's in-app Share button copies a blob like `7.92 ttv:/ 复制打开抖音，看看【…】 https://v.douyin.com/XXXXX/` — this regex pulls out just the URL.
+This regex pulls the `v.douyin.com/XXXX` short link out of the mixed text blob above. Without it the whole blob gets URL-encoded and the API can't parse anything.
 
 **3. Get Contents of URL**
 - URL: `https://digitaldialogue.com.au/api/download?url=` followed by the **Matches** variable from step 2
@@ -95,9 +105,11 @@ Douyin's in-app Share button copies a blob like `7.92 ttv:/ 复制打开抖音�
 - Input: **Contents of URL** from step 3
 - Album: **Recents** (or any album you prefer)
 
-Name the Shortcut (e.g. "Save to Photos") and enable **Show in Share Sheet** in its settings.
+#### Use it
 
-**Use it**: in the Douyin app, tap any video's **Share** → swipe to find your Shortcut → video lands in Photos. If you just copied a share link, run the Shortcut from the home screen / widget instead.
+Open Douyin → tap any video's **Share** button → swipe the Shortcuts row and pick yours → a few seconds later the video is in Photos. If you just have a share link on the clipboard, run the Shortcut from the home screen / widget instead.
+
+> ⚠️ **Don't tap the ▶ Play button in the editor to test.** It runs without Share Sheet input, so step 1 silently falls through to Clipboard — if that doesn't contain a Douyin link you'll get a confusing error. Always test via the real Douyin share menu.
 
 ### `/api/info` — same zero bandwidth, but returns JSON if you want finer control
 
