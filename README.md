@@ -18,6 +18,32 @@ Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
 ---
 
+## iOS Shortcut: one-tap save
+
+There's a single-shot endpoint designed for iOS Shortcuts:
+
+```
+GET https://digitaldialogue.com.au/api/download?url=<share_link>
+→ 200 video/mp4
+```
+
+The response streams the watermark-free MP4 directly, so a Shortcut can pipe it straight into **Save to Photo Album**. Build a 3-action Shortcut:
+
+1. **Receive** — "Receive **Text** and **URLs** input from **Share Sheet**"
+2. **Get Contents of URL** — URL: `https://digitaldialogue.com.au/api/download?url=` then insert the Shortcut Input variable (Shortcuts URL-encodes it automatically). Method: **GET**.
+3. **Save to Photo Album**
+
+Long-press any video in 抖音 / TikTok → **Share** → tap this Shortcut → video lands in Photos. No intermediate "save to Files" step.
+
+Response also exposes metadata in headers if you want to use it inside the Shortcut:
+
+| Header               | Example                                   |
+| -------------------- | ----------------------------------------- |
+| `Content-Disposition`| `attachment; filename="douyin_7631...mp4"`|
+| `X-Video-Platform`   | `douyin` or `tiktok`                      |
+| `X-Video-Id`         | `v0d00fg10000d7jk097og65m1m8dl080`        |
+| `X-Video-Title`      | percent-encoded UTF-8 caption             |
+
 ## Features
 
 - **Douyin + TikTok** — auto-detects the platform from the URL
@@ -58,11 +84,13 @@ The proxy exists because TikTok's CDN requires session cookies captured during t
 
 ```
 douyin_downloader/
-├── index.html                  # mobile-first UI (SwiftUI-like i18n)
+├── index.html                  # mobile-first UI with i18n
 ├── netlify/functions/
-│   ├── parse.js                # share link → video URL (Douyin + TikTok)
-│   └── video.mjs               # streaming CDN proxy with allowlist
-├── netlify.toml                # Netlify config (publish=., functions dir)
+│   ├── _lib.mjs                # shared: parse + fetchVideoStream
+│   ├── parse.js                # POST  → JSON with proxy URL
+│   ├── video.mjs               # GET   → streaming CDN proxy (uses allowlist)
+│   └── download.mjs            # GET   → one-shot MP4 stream for Shortcuts
+├── netlify.toml                # Netlify config + /api/download redirect
 ├── sitemap.xml
 ├── robots.txt
 ├── screenshots/                # README assets

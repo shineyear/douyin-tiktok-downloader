@@ -12,3 +12,11 @@
   publish = "."
   port = 8888
   targetPort = 0
+
+# Short, Shortcut-friendly URL for the one-shot download endpoint.
+# iOS Shortcuts "Get Contents of URL" -> https://digitaldialogue.com.au/api/download?url=...
+[[redirects]]
+  from = "/api/download"
+  to = "/.netlify/functions/download"
+  status = 200
+  force = true
