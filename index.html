@@ -449,7 +449,7 @@
         <div class="tip">${tip}</div>
         <button class="save-btn" id="save" data-src="${data.video_url}" data-name="${filename}" disabled>${t('downloading')} 0%</button>
         <div class="progress" id="progress"><span></span></div>
-        <a class="backup" href="${data.video_url}" target="_blank" rel="noopener">${t('backup')}</a>
+        <a class="backup" href="${data.direct_url || data.video_url}" target="_blank" rel="noopener">${t('backup')}</a>
       `;
 
       document.getElementById('save').onclick = onSaveClick;
