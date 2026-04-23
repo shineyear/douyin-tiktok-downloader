@@ -150,12 +150,20 @@
     .save-btn:disabled { background: #3a3a3a; color: #888; }
     .backup {
       display: block;
+      width: 100%;
       margin-top: 10px;
+      padding: 12px;
+      background: #262626;
+      color: #ddd;
+      border: 0;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 500;
       text-align: center;
-      color: #888;
-      font-size: 13px;
-      text-decoration: underline;
+      -webkit-appearance: none;
+      cursor: pointer;
     }
+    .backup:disabled { color: #666; }
     .progress {
       margin-top: 10px;
       height: 4px;
@@ -221,7 +229,7 @@
       tipOther: '📱 点下方按钮直接下载到手机',
       save: '💾 保存到相册',
       downloading: '⏳ 视频下载中',
-      backup: '或点此在新标签打开 MP4',
+      backup: '下载到文件（存到 Files）',
       retry: '❌ 下载失败，点击重试',
       shareOpened: '✓ 已保存',
       cancelled: '已取消，再点一次可重试',
@@ -248,7 +256,7 @@
       tipOther: '📱 Tap the button to download to your phone',
       save: '💾 Save to Photos',
       downloading: '⏳ Downloading',
-      backup: 'Or open MP4 in a new tab',
+      backup: 'Download to Files',
       retry: '❌ Download failed, tap to retry',
       shareOpened: '✓ Saved',
       cancelled: 'Cancelled — tap again to retry',
@@ -275,7 +283,7 @@
       tipOther: '📱 下のボタンで直接ダウンロード',
       save: '💾 写真に保存',
       downloading: '⏳ ダウンロード中',
-      backup: 'または新しいタブで MP4 を開く',
+      backup: 'ファイルにダウンロード',
       retry: '❌ ダウンロード失敗、タップして再試行',
       shareOpened: '✓ 共有メニューを開きました',
       cancelled: 'キャンセル — もう一度タップで再試行',
@@ -302,7 +310,7 @@
       tipOther: '📱 Toca el botón para descargar al teléfono',
       save: '💾 Guardar en Fotos',
       downloading: '⏳ Descargando',
-      backup: 'O abrir MP4 en nueva pestaña',
+      backup: 'Descargar a Archivos',
       retry: '❌ Descarga fallida, toca para reintentar',
       shareOpened: '✓ Hoja de compartir abierta',
       cancelled: 'Cancelado — toca otra vez para reintentar',
@@ -440,13 +448,6 @@
         : '<span class="platform-tag tag-douyin">抖音</span>';
       const filename = `${platform}_${data.item_id || data.video_id || Date.now()}.mp4`;
 
-      // Backup link routes through /api/download because it sets
-      // Content-Disposition: attachment — Safari reliably shows the
-      // "Download?" prompt instead of playing the MP4 inline. Douyin's
-      // direct CDN URL would be bandwidth-free but plays inline (CDN
-      // doesn't set the disposition header).
-      const backupHref = `/api/download?url=${encodeURIComponent(text)}`;
-
       // Start with a cover-only placeholder; the <video> src is set from
       // the pre-downloaded blob when it's ready, so preview and save share
       // ONE proxy request instead of two.
@@ -456,10 +457,11 @@
         <div class="tip">${tip}</div>
         <button class="save-btn" id="save" data-src="${data.video_url}" data-name="${filename}" disabled>${t('downloading')} 0%</button>
         <div class="progress" id="progress"><span></span></div>
-        <a class="backup" href="${backupHref}" rel="noopener">${t('backup')}</a>
+        <button class="backup" id="backup" disabled>${t('backup')}</button>
       `;
 
       document.getElementById('save').onclick = onSaveClick;
+      document.getElementById('backup').onclick = onBackupClick;
       prefetchVideo(data.video_url, filename);
     } catch (err) {
       result.innerHTML = `<div class="error">${t('errorPrefix')}${escapeHtml(err.message)}</div>`;
@@ -522,6 +524,8 @@
         const prog = document.getElementById('progress');
         if (prog) prog.hidden = true;
       }
+      const backup = document.getElementById('backup');
+      if (backup) backup.disabled = false;
     } catch (err) {
       videoState.error = err;
       if (btn) {
@@ -563,6 +567,24 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     btn.textContent = t('downloaded');
+  }
+
+  // Secondary "download to Files" button — uses the already-prefetched
+  // blob so there is NO network call, NO re-parse, NO navigation away.
+  // On iOS Safari, clicking an <a download href="blob:..."> pops the
+  // native "Download?" prompt → saves to the Files app.
+  function onBackupClick(ev) {
+    const file = videoState.file;
+    if (!file) { alert(t('notReady')); return; }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    ev.currentTarget.textContent = t('downloaded');
   }
 </script>
 </body>
