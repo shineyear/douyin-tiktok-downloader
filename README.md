@@ -66,13 +66,38 @@ GET https://digitaldialogue.com.au/api/download?url=<share_link>
 → 302 Location: https://v5-dy-o-abtest.zjcdn.com/.../video.mp4
 ```
 
-A 3-action iOS Shortcut. The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redirect and pulls bytes straight from Douyin.
+The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redirect and pulls bytes straight from Douyin. **Zero bytes transit our server.**
 
-1. **Receive** — "Receive **Text** and **URLs** input from **Share Sheet**"
-2. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` then insert the Shortcut Input variable (Shortcuts URL-encodes it). Method: **GET**.
-3. **Save to Photo Album**
+<p align="center">
+  <img src="screenshots/ios-shortcut.jpg" width="320" alt="iOS Shortcut configuration">
+</p>
 
-In the Douyin app, tap a video's share button → your Shortcut → video lands in Photos. No intermediate file copy.
+Build a 4-action Shortcut exactly as shown above. On iPhone: open the **Shortcuts** app → tap **+** → add these actions in order:
+
+**1. Receive `Text` from Share Sheet**
+- Action: *Receive input from Share Sheet*
+- Accept: **Text** (uncheck the other types)
+- If there's no input: **Get Clipboard** (so it also works when you copy a share link instead of using the share button)
+
+**2. Match Text with Regular Expression**
+- Action: *Match Text*
+- Pattern: `https:\/\/v\.douyin\.com\/[A-Za-z0-9\/?=_-]+`
+- Input: **Shortcut Input**
+
+Douyin's in-app Share button copies a blob like `7.92 ttv:/ 复制打开抖音，看看【…】 https://v.douyin.com/XXXXX/` — this regex pulls out just the URL.
+
+**3. Get Contents of URL**
+- URL: `https://digitaldialogue.com.au/api/download?url=` followed by the **Matches** variable from step 2
+- Method: **GET** (default; Shortcuts URL-encodes the appended variable automatically)
+
+**4. Save to Photo Album**
+- Action: *Save to Photo Album*
+- Input: **Contents of URL** from step 3
+- Album: **Recents** (or any album you prefer)
+
+Name the Shortcut (e.g. "Save to Photos") and enable **Show in Share Sheet** in its settings.
+
+**Use it**: in the Douyin app, tap any video's **Share** → swipe to find your Shortcut → video lands in Photos. If you just copied a share link, run the Shortcut from the home screen / widget instead.
 
 ### `/api/info` — same zero bandwidth, but returns JSON if you want finer control
 
