@@ -18,31 +18,59 @@ Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
 ---
 
-## iOS Shortcut: one-tap save
+## API for iOS Shortcuts
 
-There's a single-shot endpoint designed for iOS Shortcuts:
+Two endpoints, two trade-offs:
+
+### `/api/download` — one-shot, bytes through our server
 
 ```
 GET https://digitaldialogue.com.au/api/download?url=<share_link>
 → 200 video/mp4
 ```
 
-The response streams the watermark-free MP4 directly, so a Shortcut can pipe it straight into **Save to Photo Album**. Build a 3-action Shortcut:
+Single HTTP call, response streams the watermark-free MP4 straight into **Save to Photo Album**. Simplest Shortcut (3 actions):
 
-1. **Receive** — "Receive **Text** and **URLs** input from **Share Sheet**"
-2. **Get Contents of URL** — URL: `https://digitaldialogue.com.au/api/download?url=` then insert the Shortcut Input variable (Shortcuts URL-encodes it automatically). Method: **GET**.
+1. **Receive** — Text / URLs from Share Sheet
+2. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` + Shortcut Input, method GET
 3. **Save to Photo Album**
 
-Long-press any video in 抖音 / TikTok → **Share** → tap this Shortcut → video lands in Photos. No intermediate "save to Files" step.
+Trade-off: every byte goes through our server, counts against Netlify bandwidth.
 
-Response also exposes metadata in headers if you want to use it inside the Shortcut:
+### `/api/info` — zero bandwidth, direct CDN fetch
 
-| Header               | Example                                   |
-| -------------------- | ----------------------------------------- |
-| `Content-Disposition`| `attachment; filename="douyin_7631...mp4"`|
-| `X-Video-Platform`   | `douyin` or `tiktok`                      |
-| `X-Video-Id`         | `v0d00fg10000d7jk097og65m1m8dl080`        |
-| `X-Video-Title`      | percent-encoded UTF-8 caption             |
+```
+GET https://digitaldialogue.com.au/api/info?url=<share_link>
+→ 200 application/json
+{
+  "platform": "douyin",
+  "filename": "douyin_7631...mp4",
+  "direct": {
+    "url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=...",
+    "headers": { "User-Agent": "...", "Referer": "https://www.douyin.com/" }
+  },
+  "proxy_url": "https://digitaldialogue.com.au/api/download?url=..."
+}
+```
+
+Returns only metadata (~1 KB). The Shortcut fetches the MP4 directly from the CDN with the headers we provided — **our server stays out of the video bytes**. Works reliably for Douyin; TikTok's signed URLs can be IP-bound so use `proxy_url` as a fallback.
+
+Shortcut (5 actions for Douyin):
+
+1. Receive Text / URLs from Share Sheet
+2. Get Contents of URL — `https://digitaldialogue.com.au/api/info?url=` + Shortcut Input
+3. Get Dictionary Value → `direct.url`
+4. Get Contents of URL — the URL from step 3, with Headers: `User-Agent` = `direct.headers.User-Agent`, `Referer` = `direct.headers.Referer`
+5. Save to Photo Album
+
+### Download response headers (for either path)
+
+| Header                | Example                                   |
+| --------------------- | ----------------------------------------- |
+| `Content-Disposition` | `attachment; filename="douyin_7631...mp4"`|
+| `X-Video-Platform`    | `douyin` or `tiktok`                      |
+| `X-Video-Id`          | `v0d00fg10000d7jk097og65m1m8dl080`        |
+| `X-Video-Title`       | percent-encoded UTF-8 caption             |
 
 ## Features
 
@@ -87,9 +115,10 @@ douyin_downloader/
 ├── index.html                  # mobile-first UI with i18n
 ├── netlify/functions/
 │   ├── _lib.mjs                # shared: parse + fetchVideoStream
-│   ├── parse.js                # POST  → JSON with proxy URL
+│   ├── parse.js                # POST  → JSON with proxy URL (used by the web UI)
 │   ├── video.mjs               # GET   → streaming CDN proxy (uses allowlist)
-│   └── download.mjs            # GET   → one-shot MP4 stream for Shortcuts
+│   ├── download.mjs            # GET   → one-shot MP4 stream (simple Shortcut)
+│   └── info.mjs                # GET   → JSON with direct CDN URL + headers (zero-bandwidth Shortcut)
 ├── netlify.toml                # Netlify config + /api/download redirect
 ├── sitemap.xml
 ├── robots.txt

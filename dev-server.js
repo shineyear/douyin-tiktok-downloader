@@ -13,6 +13,7 @@ const ROOT = __dirname;
 
 let videoFn;    // loaded lazily via dynamic import (ESM)
 let downloadFn; // ditto, for /api/download (one-shot MP4 for iOS Shortcuts)
+let infoFn;     // ditto, for /api/info (returns direct CDN URL + headers)
 
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { 'Cache-Control': 'no-store', ...headers });
@@ -94,6 +95,10 @@ async function handler(req, res) {
   if (req.url.startsWith('/api/download') || req.url.startsWith('/.netlify/functions/download')) {
     if (!downloadFn) downloadFn = (await import('./netlify/functions/download.mjs')).default;
     return handleV2(req, res, downloadFn);
+  }
+  if (req.url.startsWith('/api/info') || req.url.startsWith('/.netlify/functions/info')) {
+    if (!infoFn) infoFn = (await import('./netlify/functions/info.mjs')).default;
+    return handleV2(req, res, infoFn);
   }
   serveStatic(req, res);
 }

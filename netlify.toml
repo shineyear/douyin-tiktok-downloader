@@ -20,3 +20,10 @@
   to = "/.netlify/functions/download"
   status = 200
   force = true
+
+# Zero-bandwidth metadata endpoint — returns direct CDN URL + required headers.
+[[redirects]]
+  from = "/api/info"
+  to = "/.netlify/functions/info"
+  status = 200
+  force = true
