@@ -11,9 +11,8 @@ const PORT = process.env.PORT || 8888;
 const HTTPS_PORT = process.env.HTTPS_PORT || 8443;
 const ROOT = __dirname;
 
-let videoFn;    // loaded lazily via dynamic import (ESM)
-let downloadFn; // ditto, for /api/download (one-shot MP4 for iOS Shortcuts)
-let infoFn;     // ditto, for /api/info (returns direct CDN URL + headers)
+let downloadFn; // loaded lazily for /api/download (one-shot streaming)
+let infoFn;     // loaded lazily for /api/info (zero-bandwidth metadata)
 
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { 'Cache-Control': 'no-store', ...headers });
@@ -87,11 +86,6 @@ function serveStatic(req, res) {
 
 async function handler(req, res) {
   if (req.url.startsWith('/.netlify/functions/parse')) return handleClassic(req, res);
-  if (req.url.startsWith('/.netlify/functions/video')) {
-    if (!videoFn) videoFn = (await import('./netlify/functions/video.mjs')).default;
-    return handleV2(req, res, videoFn);
-  }
-  // Rewrite /api/download -> /.netlify/functions/download to match the Netlify redirect.
   if (req.url.startsWith('/api/download') || req.url.startsWith('/.netlify/functions/download')) {
     if (!downloadFn) downloadFn = (await import('./netlify/functions/download.mjs')).default;
     return handleV2(req, res, downloadFn);

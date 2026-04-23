@@ -19,7 +19,7 @@ exports.handler = async (event) => {
   const raw = (body.url || '').toString().trim();
   if (!raw) return json(400, { error: '链接为空' });
 
-  const { parseShareLink, buildVideoProxyUrl } = await import('./_lib.mjs');
+  const { parseShareLink } = await import('./_lib.mjs');
 
   let parsed;
   try {
@@ -28,18 +28,15 @@ exports.handler = async (event) => {
     return json(502, { error: err.message });
   }
 
-  // direct_url: if Safari following this link will work without our proxy.
-  // Douyin's play endpoint accepts the browser's native mobile UA (no IP
-  // binding, no cookies). TikTok's signed URLs need cookies the browser
-  // can't set, so force the proxy path there.
-  const directUrl = parsed.platform === 'douyin'
-    ? `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(parsed.vid)}&ratio=720p&line=0`
-    : null;
-
+  // Zero-bandwidth design: we pre-resolve aweme.snssdk.com/play's 302
+  // server-side (it has no CORS headers so the browser can't follow it
+  // directly), and hand the final CDN URL to the browser. The browser
+  // fetches it with referrerPolicy:'no-referrer' (Douyin CDN's
+  // anti-hotlink filter rejects cross-origin Referers). Netlify egress
+  // for the actual video bytes: 0.
   return json(200, {
     platform: parsed.platform,
-    video_url: buildVideoProxyUrl(parsed),
-    direct_url: directUrl,
+    direct_cdn_url: parsed.resolvedCdnUrl || null,
     video_id: parsed.video_id,
     cover: parsed.cover,
     title: parsed.title,

@@ -1,10 +1,14 @@
-// One-shot endpoint for iOS Shortcuts & other external callers.
-//   GET /api/download?url=<share_link>   (mapped in netlify.toml)
-//   GET /.netlify/functions/download?url=<share_link>
-// Parses the share link and streams back MP4 bytes in the same response, so
-// a Shortcut can do "Get Contents of URL" -> "Save to Photo Album".
+// One-shot download endpoint for iOS Shortcuts & other API consumers.
+//   GET /api/download?url=<share_link>
+// We parse the share link and 302-redirect to the resolved CDN URL.
+// The HTTP client (Shortcut, curl, etc.) follows the redirect and pulls
+// the MP4 directly from the CDN — zero Netlify egress for the bytes.
+//
+// Douyin's CDN (v5-dy-o-abtest.zjcdn.com / v*.douyinvod.com) rejects any
+// cross-origin Referer, but HTTP clients don't add a Referer header when
+// following a server 302 (verified with curl -L), so the follow succeeds.
 
-import { parseShareLink, fetchVideoStream } from './_lib.mjs';
+import { parseShareLink } from './_lib.mjs';
 
 export default async (req) => {
   const url = new URL(req.url);
@@ -18,35 +22,22 @@ export default async (req) => {
     return plain(502, `parse failed: ${err.message}`);
   }
 
-  let upstream;
-  try {
-    upstream = await fetchVideoStream(parsed, { range: req.headers.get('range') });
-  } catch (err) {
-    return plain(502, `upstream build failed: ${err.message}`);
+  if (!parsed.resolvedCdnUrl) {
+    return plain(502, 'could not resolve Douyin CDN URL');
   }
 
-  if (!upstream.ok && upstream.status !== 206) {
-    return plain(upstream.status, `upstream ${upstream.status}`);
-  }
-
-  const filename = `${parsed.platform}_${parsed.item_id || parsed.video_id || 'video'}.mp4`;
-  const headers = new Headers({
-    'Content-Type': 'video/mp4',
-    'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store',
-    // attachment disposition encourages Shortcuts' "Get Contents" to treat
-    // the response as a file rather than trying to preview it.
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'X-Video-Platform': parsed.platform,
-    'X-Video-Id': parsed.video_id || '',
-    'X-Video-Title': encodeURIComponent(parsed.title || ''),
+  // 302 — client follows to the CDN. Bytes never touch this function.
+  // Referrer-Policy: no-referrer as a belt-and-braces hint for browsers.
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Location': parsed.resolvedCdnUrl,
+      'Referrer-Policy': 'no-referrer',
+      'Cache-Control': 'no-store',
+      'X-Video-Id': parsed.video_id || '',
+      'X-Video-Title': encodeURIComponent(parsed.title || ''),
+    },
   });
-  for (const k of ['content-length', 'content-range', 'etag']) {
-    const v = upstream.headers.get(k);
-    if (v) headers.set(k, v);
-  }
-
-  return new Response(upstream.body, { status: upstream.status, headers });
 };
 
 function plain(status, msg) {

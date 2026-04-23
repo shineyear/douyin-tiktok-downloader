@@ -1,9 +1,11 @@
-# Douyin & TikTok Video Downloader
+# Douyin Video Downloader
 
 [![Deploy Status](https://img.shields.io/badge/status-live-success)](https://digitaldialogue.com.au/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A mobile-first web tool that parses a Douyin (抖音) or TikTok share link and saves the **watermark‑free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign‑up, no ads.
+A mobile-first web tool that parses a Douyin (抖音) share link and saves the **watermark-free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign-up, no ads.
+
+**Zero-bandwidth design**: the web page and every API consumer pull the MP4 **directly from Douyin's CDN**. Our server only does the small HTML/JSON parse (~1 KB) — **no video bytes transit the server**.
 
 Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
@@ -18,26 +20,61 @@ Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
 ---
 
+## Features
+
+- **Douyin only** — watermark-free MP4 via `_ROUTER_DATA` parsing
+- **Zero hosting bandwidth** — video bytes flow browser ↔ Douyin CDN, not through us (see architecture below)
+- **Save to Photos on iPhone** — tap once, native Share Sheet opens with "Save Video"
+- **Progress prefetch** — the MP4 streams into memory during render so the save click can call `navigator.share()` synchronously (avoids Safari's NotAllowedError from expired user activation)
+- **i18n** — 中文 / English / 日本語 / Español, picked by `?lang=` query param or browser locale
+- **SEO** — per-language title/description, OG tags, hreflang, canonical, JSON-LD, sitemap, robots.txt
+- **Two public APIs** for iOS Shortcuts, both zero-bandwidth
+
+## How the zero-bandwidth trick works
+
+Douyin's `aweme.snssdk.com/play` endpoint returns a 302 redirect to the actual CDN URL (`v5-dy-o-abtest.zjcdn.com/...`). Two asymmetries make the magic:
+
+1. `aweme.snssdk.com` has **no CORS headers** → a browser can't follow its 302 from JavaScript.
+2. The redirect target `*.zjcdn.com` has `Access-Control-Allow-Origin: *` → a browser **can** CORS-fetch it.
+3. The CDN rejects any cross-origin `Referer` as anti-hotlinking → the browser must use `referrerPolicy: 'no-referrer'`.
+
+So our `/parse` endpoint performs the 302-follow server-side, hands the resolved CDN URL to the browser, and the browser fetches it directly with no-referrer. Netlify egress: ~1 KB of JSON per video.
+
+```
+Browser                  Netlify Function              Douyin
+───────                  ────────────────              ──────
+  │                            │                         │
+  ├─ POST /parse ────────────> │                         │
+  │                            ├── GET share URL ──────> │
+  │                            │<── HTML  ───────────────│
+  │                            │   (extract video_id)    │
+  │                            ├── HEAD aweme/play ────> │
+  │                            │<── 302 Location: CDN ───│
+  │<── { direct_cdn_url, … } ──│                         │
+  │                                                      │
+  ├─ GET direct_cdn_url (no Referer) ──────────────────> │
+  │<── MP4 bytes ←─ 15 MB straight from Douyin CDN ────  │
+  │   (<video> plays + File for navigator.share)         │
+```
+
 ## API for iOS Shortcuts
 
-Two endpoints, two trade-offs:
-
-### `/api/download` — one-shot, bytes through our server
+### `/api/download` — simplest, zero-bandwidth
 
 ```
 GET https://digitaldialogue.com.au/api/download?url=<share_link>
-→ 200 video/mp4
+→ 302 Location: https://v5-dy-o-abtest.zjcdn.com/.../video.mp4
 ```
 
-Single HTTP call, response streams the watermark-free MP4 straight into **Save to Photo Album**. Simplest Shortcut (3 actions):
+A 3-action iOS Shortcut. The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redirect and pulls bytes straight from Douyin.
 
-1. **Receive** — Text / URLs from Share Sheet
-2. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` + Shortcut Input, method GET
+1. **Receive** — "Receive **Text** and **URLs** input from **Share Sheet**"
+2. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` then insert the Shortcut Input variable (Shortcuts URL-encodes it). Method: **GET**.
 3. **Save to Photo Album**
 
-Trade-off: every byte goes through our server, counts against Netlify bandwidth.
+In the Douyin app, tap a video's share button → your Shortcut → video lands in Photos. No intermediate file copy.
 
-### `/api/info` — zero bandwidth, direct CDN fetch
+### `/api/info` — same zero bandwidth, but returns JSON if you want finer control
 
 ```
 GET https://digitaldialogue.com.au/api/info?url=<share_link>
@@ -46,67 +83,15 @@ GET https://digitaldialogue.com.au/api/info?url=<share_link>
   "platform": "douyin",
   "filename": "douyin_7631...mp4",
   "direct": {
-    "url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=...",
-    "headers": { "User-Agent": "...", "Referer": "https://www.douyin.com/" }
+    "url": "https://v5-dy-o-abtest.zjcdn.com/.../video.mp4",
+    "headers": { "User-Agent": "..." },
+    "note": "Send this request WITHOUT a Referer header."
   },
-  "proxy_url": "https://digitaldialogue.com.au/api/download?url=..."
+  "download_url": "https://digitaldialogue.com.au/api/download?url=..."
 }
 ```
 
-Returns only metadata (~1 KB). The Shortcut fetches the MP4 directly from the CDN with the headers we provided — **our server stays out of the video bytes**. Works reliably for Douyin; TikTok's signed URLs can be IP-bound so use `proxy_url` as a fallback.
-
-Shortcut (5 actions for Douyin):
-
-1. Receive Text / URLs from Share Sheet
-2. Get Contents of URL — `https://digitaldialogue.com.au/api/info?url=` + Shortcut Input
-3. Get Dictionary Value → `direct.url`
-4. Get Contents of URL — the URL from step 3, with Headers: `User-Agent` = `direct.headers.User-Agent`, `Referer` = `direct.headers.Referer`
-5. Save to Photo Album
-
-### Download response headers (for either path)
-
-| Header                | Example                                   |
-| --------------------- | ----------------------------------------- |
-| `Content-Disposition` | `attachment; filename="douyin_7631...mp4"`|
-| `X-Video-Platform`    | `douyin` or `tiktok`                      |
-| `X-Video-Id`          | `v0d00fg10000d7jk097og65m1m8dl080`        |
-| `X-Video-Title`       | percent-encoded UTF-8 caption             |
-
-## Features
-
-- **Douyin + TikTok** — auto-detects the platform from the URL
-- **Watermark-free** — pulls the clean `play_addr` / `playAddr` MP4
-- **Save to Photos on iPhone** — tap once, native Share Sheet opens with "Save Video"
-- **Progress prefetch** — the MP4 downloads in the background while the page renders, so the save button click can call `navigator.share()` synchronously (avoids Safari's NotAllowedError from expired user activation)
-- **i18n** — 中文 / English / 日本語 / Español, picked by `?lang=` query param or browser locale
-- **SEO** — per-language title/description, OG tags, hreflang, canonical, JSON-LD, sitemap, robots.txt
-- **No servers to run** — deploys as a static page + two Netlify Functions
-
-## How it works
-
-```
-Browser           Netlify Function             Douyin / TikTok
-───────           ────────────────             ───────────────
-  │                    │                             │
-  ├─ POST /parse ─────>│                             │
-  │                    ├── GET share URL ──────────>│
-  │                    │<── HTML + Set-Cookie ──────│
-  │                    │   (extract play addr +     │
-  │                    │    session cookies)        │
-  │<── { video_url,    │                             │
-  │      cover, title }│                             │
-  │                    │                             │
-  ├─ GET /video?... ──>│                             │
-  │                    ├── GET CDN URL w/ UA+Ref ─>│
-  │                    │<── MP4 stream ────────────│
-  │<── MP4 stream ─────│                             │
-  │   (iOS Safari plays inline + long-press works)  │
-```
-
-- **`/parse`** (classic Lambda): resolves the short URL, parses `_ROUTER_DATA` (Douyin) or `__UNIVERSAL_DATA_FOR_REHYDRATION__` (TikTok), returns a proxy URL pointing to `/video`.
-- **`/video`** (v2 streaming function): re-fetches the CDN MP4 server-side with the right `User-Agent` + `Referer` + session cookies, streams it back to the browser with a clean `Content-Type: video/mp4` so iOS treats it as a first-class media resource.
-
-The proxy exists because TikTok's CDN requires session cookies captured during the HTML fetch (otherwise 403), and Douyin's play URLs are one-shot / short-lived.
+Use this if you want to inspect metadata (title, cover, video_id) inside your Shortcut before fetching, or if you want to set a custom User-Agent.
 
 ## Layout
 
@@ -114,12 +99,11 @@ The proxy exists because TikTok's CDN requires session cookies captured during t
 douyin_downloader/
 ├── index.html                  # mobile-first UI with i18n
 ├── netlify/functions/
-│   ├── _lib.mjs                # shared: parse + fetchVideoStream
-│   ├── parse.js                # POST  → JSON with proxy URL (used by the web UI)
-│   ├── video.mjs               # GET   → streaming CDN proxy (uses allowlist)
-│   ├── download.mjs            # GET   → one-shot MP4 stream (simple Shortcut)
-│   └── info.mjs                # GET   → JSON with direct CDN URL + headers (zero-bandwidth Shortcut)
-├── netlify.toml                # Netlify config + /api/download redirect
+│   ├── _lib.mjs                # shared parser + 302 resolver
+│   ├── parse.js                # POST  → JSON with direct_cdn_url (used by the web UI)
+│   ├── download.mjs            # GET   → 302 redirect to CDN (simple Shortcut)
+│   └── info.mjs                # GET   → JSON with direct.url + headers (advanced Shortcut)
+├── netlify.toml                # Netlify config + /api/* redirects
 ├── sitemap.xml
 ├── robots.txt
 ├── screenshots/                # README assets
@@ -144,16 +128,14 @@ Open `https://<lan-ip>:8443/` on your iPhone, accept the self-signed cert warnin
 
 ## Deploy
 
-Drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop) — Netlify picks up `netlify.toml` automatically. The default Node 18 runtime supports v2 streaming functions out of the box.
+Drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop) — Netlify picks up `netlify.toml` automatically. Node 18 runtime supports v2 streaming functions out of the box.
 
 ## Why the funny workarounds?
 
-A few decisions worth calling out because they took real debugging to land on:
-
-- **Prefetch the full MP4 on parse, not on save click.** `navigator.share()` requires transient user activation (~5s from click). Awaiting a multi-MB download inside the click handler blows past that window and Safari throws `NotAllowedError`. Prefetching means the save click can call `share()` synchronously.
-- **Desktop UA for TikTok, mobile UA for Douyin.** TikTok's web CDN rejects mobile UA; Douyin's `aweme.snssdk.com/play` endpoint prefers mobile.
-- **Forward TikTok session cookies.** TikTok's play URLs have `tk=tt_chain_token` that is validated against a matching `Cookie: tt_chain_token=…`. Parse captures the cookie from the HTML response, we pass it through the proxy URL.
-- **Allowlist CDN hosts in the proxy.** Prevents the `/video` endpoint being used as an open proxy. Currently allows Douyin / TikTok / ByteDance CDN domains only.
+- **Prefetch the full MP4 on parse, not on save click.** `navigator.share()` requires transient user activation (~5s from click). Awaiting a multi-MB download inside the click handler blows past that window and Safari throws `NotAllowedError`. Prefetching means the save click calls `share()` synchronously.
+- **`referrerPolicy: 'no-referrer'` everywhere.** Douyin's CDN anti-hotlink filter accepts a request with no Referer but 403s on any cross-origin one. We set the policy on the prefetch `fetch()` and use a 302 for the Shortcut endpoint (HTTP clients don't add Referer when following 302s).
+- **Server-resolve the `aweme.snssdk.com/play` 302.** That origin has no CORS headers so browsers can't follow its 302 in JS. The redirect target does, so we do the follow once server-side and hand the target URL to the client.
+- **TikTok was dropped.** Its signed URLs require session cookies the browser can't replay, which forces all bytes through a proxy. That defeats the zero-bandwidth design, so we removed TikTok rather than make it the one path that costs bandwidth.
 
 ## License
 
@@ -161,4 +143,4 @@ MIT
 
 ## Credits
 
-Built by [@shineyear](https://github.com/shineyear) — originally a one-off personal tool, made public after friends kept asking how to save Douyin videos to their iPhones without installing sketchy apps.
+Built by [@shineyear](https://github.com/shineyear).
