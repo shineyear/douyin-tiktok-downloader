@@ -80,7 +80,9 @@
       border: 1px solid #2a2a2a;
       background: #141414;
       color: #fff;
-      font-size: 15px;
+      /* 16px min: anything smaller triggers iOS Safari auto-zoom on focus,
+         which breaks the layout by pushing content off-screen. */
+      font-size: 16px;
       line-height: 1.5;
       resize: none;
       -webkit-appearance: none;
@@ -464,19 +466,31 @@
     try {
       const resp = await fetch(src);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      // Netlify v2 streaming functions strip Content-Length, so we often
+      // don't know the total size — fall back to showing megabytes.
       const total = +resp.headers.get('Content-Length') || 0;
       const reader = resp.body.getReader();
       const chunks = [];
       let received = 0;
+      let lastPaint = 0;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         chunks.push(value);
         received += value.length;
-        if (total && btn) {
+        if (!btn) continue;
+        // Throttle UI updates to ~every 100ms so fast pipes still paint progress.
+        const now = performance.now();
+        if (now - lastPaint < 100) continue;
+        lastPaint = now;
+        if (total) {
           const pct = Math.round(received / total * 100);
           bar.style.width = pct + '%';
           btn.textContent = `${t('downloading')} ${pct}%`;
+        } else {
+          const mb = (received / 1048576).toFixed(1);
+          bar.style.width = Math.min(90, received / 1048576 * 6) + '%';
+          btn.textContent = `${t('downloading')} ${mb} MB`;
         }
       }
       const blob = new Blob(chunks, { type: 'video/mp4' });
