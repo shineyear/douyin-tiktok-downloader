@@ -397,12 +397,19 @@
   // navigator.share() SYNCHRONOUSLY and keep Safari's transient user
   // activation alive. Without this, awaiting a large fetch inside the
   // click handler expires the activation and share() throws NotAllowedError.
-  let videoState = { file: null, error: null };
+  // The same blob is reused as the <video> src so we only hit the CDN
+  // proxy ONCE per video (instead of once for preview + once for save).
+  let videoState = { file: null, error: null, blobUrl: null };
+
+  function resetVideoState() {
+    if (videoState.blobUrl) URL.revokeObjectURL(videoState.blobUrl);
+    videoState = { file: null, error: null, blobUrl: null };
+  }
 
   clearBtn.onclick = () => {
     input.value = '';
     result.innerHTML = '';
-    videoState = { file: null, error: null };
+    resetVideoState();
     input.focus();
   };
 
@@ -433,9 +440,11 @@
         : '<span class="platform-tag tag-douyin">抖音</span>';
       const filename = `${platform}_${data.item_id || data.video_id || Date.now()}.mp4`;
 
+      // Start with a cover-only placeholder; the <video> src is set from
+      // the pre-downloaded blob when it's ready, so preview and save share
+      // ONE proxy request instead of two.
       result.innerHTML = `
-        <video controls playsinline preload="metadata" poster="${data.cover || ''}"
-               src="${data.video_url}"></video>
+        <video id="vid" controls playsinline preload="none" poster="${data.cover || ''}"></video>
         <div class="title">${tag}${escapeHtml(data.title || '')}</div>
         <div class="tip">${tip}</div>
         <button class="save-btn" id="save" data-src="${data.video_url}" data-name="${filename}" disabled>${t('downloading')} 0%</button>
@@ -459,7 +468,7 @@
   }
 
   async function prefetchVideo(src, name) {
-    videoState = { file: null, error: null };
+    resetVideoState();
     const btn = document.getElementById('save');
     const bar = document.getElementById('progress').querySelector('span');
 
@@ -495,11 +504,14 @@
       }
       const blob = new Blob(chunks, { type: 'video/mp4' });
       videoState.file = new File([blob], name, { type: 'video/mp4' });
+      // Feed the blob to the <video> element instead of re-fetching via the
+      // proxy — halves Netlify bandwidth per video.
+      videoState.blobUrl = URL.createObjectURL(blob);
+      const vid = document.getElementById('vid');
+      if (vid) vid.src = videoState.blobUrl;
       if (btn) {
         btn.disabled = false;
         btn.textContent = t('save');
-        // Download done — hide the progress track entirely so it doesn't
-        // look like a stray red line under the button.
         const prog = document.getElementById('progress');
         if (prog) prog.hidden = true;
       }
