@@ -434,11 +434,12 @@
     videoState = { file: null, error: null };
 
     try {
-      const resp = await fetch('/.netlify/functions/parse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: text })
-      });
+      // GET (not POST) so Netlify edge can cache the JSON response per
+      // Cache-Control headers — critical for IG where graphql rate-limits
+      // our shared Netlify IP pool.
+      const resp = await fetch(
+        '/.netlify/functions/parse?url=' + encodeURIComponent(text)
+      );
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || t('parseFailed'));
 

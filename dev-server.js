@@ -23,9 +23,17 @@ async function handleClassic(req, res) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
   const body = Buffer.concat(chunks).toString('utf8');
-  const event = { httpMethod: req.method, headers: req.headers, body };
+  // Mirror Netlify's classic handler event shape: queryStringParameters is
+  // a flat {key: value} map (not the raw query string). Without this the
+  // GET /parse?url=... path would receive no URL.
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const queryStringParameters = Object.fromEntries(parsedUrl.searchParams.entries());
+  const event = { httpMethod: req.method, headers: req.headers, body, queryStringParameters };
   try {
-    const result = await parseFn.handler(event);
+    // Re-require in dev so edits to parse.js are picked up without a restart.
+    delete require.cache[require.resolve('./netlify/functions/parse.js')];
+    const fresh = require('./netlify/functions/parse.js');
+    const result = await fresh.handler(event);
     send(res, result.statusCode, result.body, result.headers || {});
   } catch (err) {
     send(res, 500, JSON.stringify({ error: err.message }), { 'Content-Type': 'application/json' });

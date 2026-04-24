@@ -7,6 +7,8 @@ A mobile-first web tool that parses a **Douyin (抖音), TikTok, X (Twitter), or
 
 **Zero-bandwidth design**: the web page and every API consumer pull the MP4 **directly from each platform's CDN**. Our server only does the small HTML/JSON parse (~1 KB per video) — **no video bytes transit the server**.
 
+**Two-layer JSON cache**: the parse result (just the metadata, never video bytes) is cached both in-process (module-scope Map, per warm instance) and at the Netlify edge (via `Cache-Control` with per-platform TTL). A viral IG reel pasted by 100 people in 5 minutes hits Instagram's graphql endpoint **once** — the other 99 requests are served from edge cache without ever waking up our function. This is especially important for Instagram, whose graphql endpoint aggressively rate-limits shared-IP pools.
+
 Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
 <p align="center">
@@ -135,6 +137,31 @@ GET https://digitaldialogue.com.au/api/info?url=<share_link>
 ```
 
 Use this if you want to inspect metadata (title, cover, video_id) inside your Shortcut before fetching, or if you want to set a custom User-Agent.
+
+## Caching strategy (JSON metadata only — video bytes are never cached)
+
+Two layers, both keyed on the input share URL:
+
+| Layer | Where | Lifetime | Scope | What's stored |
+|-------|-------|----------|-------|---------------|
+| Module-scope `Map` | Node.js process memory on a warm Netlify function instance | per-platform TTL (see below), capped at 500 entries | one function instance | `{ platform, direct_cdn_url, title, cover, item_id, video_id, ... }` — ~500 bytes |
+| Netlify edge cache | CDN PoPs globally | same TTL, via `Cache-Control: public, max-age=N, s-maxage=N` | all users everywhere | the HTTP JSON response |
+
+Per-platform TTL is chosen *shorter* than the platform's own signed-URL expiry so a cache hit never hands out an expired CDN URL:
+
+| Platform | Cache TTL | CDN URL lifetime |
+|----------|-----------|------------------|
+| Twitter / X | **24 hours** | ~1 week (`max-age=604800`) |
+| Instagram | **25 minutes** | ~30 min (`oe=` signed) |
+| TikTok | **4 minutes** | ~5 min signed |
+| Douyin | **4 minutes** | ~5 min signed |
+
+What is **not** cached:
+- `/api/download` 302 responses (`Cache-Control: no-store`) — it 302s to a CDN URL; caching a redirect that points at a short-lived signed URL risks handing out expired URLs
+- Error responses (4xx/5xx) — a transient IG rate-limit shouldn't become permanent from the user's perspective
+- POST responses — HTTP spec forbids; our web UI uses GET so the cache kicks in
+
+Verify cache is working in prod by inspecting response headers — you'll see `cache-status: "Netlify Edge"; hit` on repeat requests to the same URL within TTL.
 
 ## Layout
 

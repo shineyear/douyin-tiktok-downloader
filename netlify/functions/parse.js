@@ -1,39 +1,57 @@
-// Netlify Function (classic Lambda signature) — parses a Douyin / TikTok
-// share link and returns JSON with a proxy URL the browser can stream from.
-// Heavy lifting lives in ./_lib.mjs so download.mjs and video.mjs can reuse it.
+// Netlify Function (classic Lambda signature) — parses a Douyin / TikTok /
+// Twitter / Instagram share link and returns JSON with a direct CDN URL
+// the browser can fetch without going through our server.
+//
+// Accepts GET (?url=) and POST ({url}). GET responses set Cache-Control
+// with a per-platform TTL so Netlify edge cache absorbs repeat hits on
+// the same share URL across all users — critical for Instagram where
+// the graphql endpoint rate-limits our IP pool aggressively.
 
-function json(status, body) {
+function json(status, body, cacheTtlSec = 0) {
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+  };
+  if (status === 200 && cacheTtlSec > 0) {
+    // public = any cache may store (including shared caches like Netlify edge)
+    // s-maxage overrides max-age for CDN/edge specifically
+    headers['Cache-Control'] = `public, max-age=${cacheTtlSec}, s-maxage=${cacheTtlSec}`;
+  } else {
+    headers['Cache-Control'] = 'no-store';
+  }
   return {
     statusCode: status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+    headers,
     body: JSON.stringify(body),
   };
 }
 
 exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' });
-
-  let body;
-  try { body = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Invalid JSON body' }); }
-
-  const raw = (body.url || '').toString().trim();
+  let raw;
+  if (event.httpMethod === 'GET') {
+    raw = (event.queryStringParameters?.url || '').toString().trim();
+  } else if (event.httpMethod === 'POST') {
+    try {
+      raw = (JSON.parse(event.body || '{}').url || '').toString().trim();
+    } catch { return json(400, { error: 'Invalid JSON body' }); }
+  } else {
+    return json(405, { error: 'Method not allowed' });
+  }
   if (!raw) return json(400, { error: '链接为空' });
 
-  const { parseShareLink } = await import('./_lib.mjs');
+  const { parseShareLink, cacheTtlForPlatform } = await import('./_lib.mjs');
 
   let parsed;
   try {
     parsed = await parseShareLink(raw);
   } catch (err) {
+    // Errors are never cached — a transient rate-limit shouldn't become
+    // permanent from the user's perspective.
     return json(502, { error: err.message });
   }
 
-  // Zero-bandwidth design: we pre-resolve aweme.snssdk.com/play's 302
-  // server-side (it has no CORS headers so the browser can't follow it
-  // directly), and hand the final CDN URL to the browser. The browser
-  // fetches it with referrerPolicy:'no-referrer' (Douyin CDN's
-  // anti-hotlink filter rejects cross-origin Referers). Netlify egress
-  // for the actual video bytes: 0.
+  // Only GET can be edge-cached; POST responses are never cached per HTTP spec.
+  const edgeTtl = event.httpMethod === 'GET' ? cacheTtlForPlatform(parsed.platform) : 0;
+
   return json(200, {
     platform: parsed.platform,
     direct_cdn_url: parsed.resolvedCdnUrl || null,
@@ -41,5 +59,5 @@ exports.handler = async (event) => {
     cover: parsed.cover,
     title: parsed.title,
     item_id: parsed.item_id,
-  });
+  }, edgeTtl);
 };

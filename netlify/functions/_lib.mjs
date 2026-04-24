@@ -386,11 +386,57 @@ async function parseInstagram(url) {
   };
 }
 
+// -------- Module-scope cache --------
+// In-process Map that lives as long as a warm function instance (Netlify
+// typically keeps instances hot for ~5-15 min). Absorbs repeat hits on the
+// same share URL within the same instance. Different concurrent instances
+// have their own cache; for cross-instance / cross-region sharing the
+// Netlify edge HTTP cache (Cache-Control headers on /parse) does the work.
+//
+// TTL per platform is chosen to be SAFELY shorter than the CDN URL's own
+// signed expiry, so a cache hit always returns a URL the client can still
+// fetch. Getting this wrong = handing out expired URLs = silent 403s.
+
+const CACHE_TTL_SEC = {
+  twitter:   24 * 60 * 60,  // 24h — twimg URLs cache-control max-age=604800 (1 week)
+  tiktok:         4 * 60,   // 4 min — CDN signed expire ~5 min
+  douyin:         4 * 60,   // 4 min — CDN signed expire ~5 min
+  instagram:     25 * 60,   // 25 min — IG URLs signed oe= ~30+ min
+};
+
+const parseCache = new Map();
+const CACHE_MAX_SIZE = 500;
+
+function cacheGet(key) {
+  const entry = parseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { parseCache.delete(key); return null; }
+  return entry.value;
+}
+
+function cacheSet(key, value, ttlSec) {
+  parseCache.set(key, { value, expiresAt: Date.now() + ttlSec * 1000 });
+  // Naive LRU-ish: if over cap, drop oldest insertion (Map iterates in insert order).
+  if (parseCache.size > CACHE_MAX_SIZE) {
+    const oldest = parseCache.keys().next().value;
+    parseCache.delete(oldest);
+  }
+}
+
+// Expose per-platform TTL to the HTTP handlers so they can set matching
+// Cache-Control headers — keeping module-scope cache and edge cache in sync.
+export function cacheTtlForPlatform(platform) {
+  return CACHE_TTL_SEC[platform] || 0;
+}
+
 // -------- Entry points --------
 
 export async function parseShareLink(rawText) {
   const url = extractUrl(rawText);
   if (!url) throw new Error('未识别到有效链接');
+
+  const hit = cacheGet(url);
+  if (hit) return hit;
 
   let platform = detectPlatform(url);
   if (platform === 'unknown') {
@@ -401,9 +447,14 @@ export async function parseShareLink(rawText) {
     } catch { /* ignore */ }
   }
 
-  if (platform === 'douyin') return parseDouyin(url);
-  if (platform === 'tiktok') return parseTikTok(url);
-  if (platform === 'twitter') return parseTwitter(url);
-  if (platform === 'instagram') return parseInstagram(url);
-  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok / Twitter / Instagram only)');
+  let result;
+  if (platform === 'douyin') result = await parseDouyin(url);
+  else if (platform === 'tiktok') result = await parseTikTok(url);
+  else if (platform === 'twitter') result = await parseTwitter(url);
+  else if (platform === 'instagram') result = await parseInstagram(url);
+  else throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok / Twitter / Instagram only)');
+
+  const ttl = CACHE_TTL_SEC[result.platform];
+  if (ttl > 0) cacheSet(url, result, ttl);
+  return result;
 }

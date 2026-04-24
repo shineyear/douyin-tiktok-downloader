@@ -4,7 +4,7 @@
 //   GET /api/info?url=<share_link>
 // Supports Douyin, TikTok, Twitter / X, and Instagram (posts/reels).
 
-import { parseShareLink, MOBILE_UA, DESKTOP_UA } from './_lib.mjs';
+import { parseShareLink, MOBILE_UA, DESKTOP_UA, cacheTtlForPlatform } from './_lib.mjs';
 
 export default async (req) => {
   const url = new URL(req.url);
@@ -17,6 +17,7 @@ export default async (req) => {
   } catch (err) {
     return json(502, { error: err.message });
   }
+  const edgeTtl = cacheTtlForPlatform(parsed.platform);
 
   const filename = `${parsed.platform}_${parsed.item_id || parsed.video_id || 'video'}.mp4`;
   // Douyin still has a fallback URL via aweme.snssdk.com if the server-side
@@ -53,16 +54,18 @@ export default async (req) => {
       note,
     },
     download_url: `${url.origin}/api/download?url=${encodeURIComponent(share)}`,
-  });
+  }, edgeTtl);
 };
 
-function json(status, body) {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*',
-    },
-  });
+function json(status, body, cacheTtlSec = 0) {
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+  };
+  if (status === 200 && cacheTtlSec > 0) {
+    headers['Cache-Control'] = `public, max-age=${cacheTtlSec}, s-maxage=${cacheTtlSec}`;
+  } else {
+    headers['Cache-Control'] = 'no-store';
+  }
+  return new Response(JSON.stringify(body, null, 2), { status, headers });
 }
