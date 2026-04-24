@@ -83,7 +83,7 @@ The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redi
 
 Open this link on your iPhone in **Safari** (not Chrome):
 
-→ **[icloud.com/shortcuts/677ab543c5894e50ad3c7acc0b9640ce](https://www.icloud.com/shortcuts/677ab543c5894e50ad3c7acc0b9640ce)**
+→ **[icloud.com/shortcuts/17c985426a4048849ae5691158b37ab6](https://www.icloud.com/shortcuts/17c985426a4048849ae5691158b37ab6)**
 
 Tap **Add Shortcut** → done. The Shortcut is named *Save to Photos* and is pre-wired with the regex below + every setting in place.
 
