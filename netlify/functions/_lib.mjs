@@ -26,6 +26,8 @@ export function detectPlatform(rawUrl) {
   try { host = new URL(rawUrl).hostname.toLowerCase(); } catch { return 'unknown'; }
   if (host.endsWith('douyin.com') || host.endsWith('iesdouyin.com')) return 'douyin';
   if (host.endsWith('tiktok.com')) return 'tiktok';
+  if (host === 'twitter.com' || host.endsWith('.twitter.com') ||
+      host === 'x.com' || host.endsWith('.x.com') || host === 't.co') return 'twitter';
   return 'unknown';
 }
 
@@ -218,6 +220,69 @@ async function parseTikTok(url) {
   };
 }
 
+// -------- Twitter / X parser --------
+
+async function parseTwitter(url) {
+  // Resolve t.co → final tweet URL (HEAD with follow). Twitter / X canonical
+  // URL is .../status/<tweet_id>, optionally /photo/N or /video/N suffix.
+  let finalUrl = url;
+  if (/^https?:\/\/t\.co\//i.test(url)) {
+    try {
+      const r = await fetch(url, { method: 'HEAD', redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      finalUrl = r.url;
+    } catch { /* fall through, the original URL may still parse */ }
+  }
+  const idMatch = finalUrl.match(/\/status(?:es)?\/(\d+)/);
+  if (!idMatch) throw new Error('无法从链接提取 tweet ID');
+  const tweetId = idMatch[1];
+
+  // syndication API is the public oEmbed/embed backend used by publish.twitter.com
+  // and every "tweet preview" service. No auth, no token strictly required —
+  // but a recent change requires a numeric `token` query param (any value works
+  // as long as it's there). We use the timestamp.
+  const token = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const synd = await fetch(
+    `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=${token}`,
+    { headers: { 'User-Agent': DESKTOP_UA, 'Accept': 'application/json' } },
+  );
+  if (!synd.ok) throw new Error(`Twitter syndication HTTP ${synd.status} (tweet may be private/deleted)`);
+  const data = await synd.json();
+
+  const v = data.video;
+  if (!v || !Array.isArray(v.variants) || !v.variants.length) {
+    throw new Error('该 tweet 不含视频（可能是图片或纯文本）');
+  }
+  // variants[] holds 1 HLS .m3u8 + several MP4 resolutions. Pick the highest
+  // MP4 by extracting the WxH from the URL path (bitrate field is null in
+  // current API responses, so URL parsing is the reliable signal).
+  const mp4s = v.variants.filter((x) => x.type === 'video/mp4' && typeof x.src === 'string');
+  if (!mp4s.length) throw new Error('Tweet 视频没有 MP4 变体（可能是 live broadcast）');
+  const scored = mp4s.map((x) => {
+    const m = x.src.match(/\/(\d+)x(\d+)\//);
+    return { src: x.src, area: m ? Number(m[1]) * Number(m[2]) : 0 };
+  }).sort((a, b) => b.area - a.area);
+  const bestUrl = scored[0].src;
+
+  // syndication API returns video.videoId as an object {type, id}, not a
+  // string — extract the id field for our string-typed response shape.
+  const innerVideoId = (v.videoId && typeof v.videoId === 'object')
+    ? v.videoId.id
+    : v.videoId;
+
+  return {
+    platform: 'twitter',
+    title: (data.text || data.user?.name || 'Twitter video').slice(0, 200),
+    cover: v.poster || '',
+    item_id: tweetId,
+    video_id: innerVideoId || tweetId,
+    vid: innerVideoId || tweetId,
+    // No 302 dance needed — video.twimg.com URLs are stable signed-by-path
+    // assets with `cache-control: max-age=604800` and `access-control-allow-origin`
+    // echoes the request Origin. Browser can fetch directly.
+    resolvedCdnUrl: bestUrl,
+  };
+}
+
 // -------- Entry points --------
 
 export async function parseShareLink(rawText) {
@@ -235,5 +300,6 @@ export async function parseShareLink(rawText) {
 
   if (platform === 'douyin') return parseDouyin(url);
   if (platform === 'tiktok') return parseTikTok(url);
-  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok only)');
+  if (platform === 'twitter') return parseTwitter(url);
+  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok / Twitter only)');
 }
