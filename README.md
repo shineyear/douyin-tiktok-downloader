@@ -1,9 +1,9 @@
-# Douyin, TikTok & X Video Downloader
+# Douyin, TikTok, X & Instagram Video Downloader
 
 [![Deploy Status](https://img.shields.io/badge/status-live-success)](https://digitaldialogue.com.au/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A mobile-first web tool that parses a **Douyin (抖音), TikTok, or X (Twitter)** share link and saves the **watermark-free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign-up, no ads.
+A mobile-first web tool that parses a **Douyin (抖音), TikTok, X (Twitter), or Instagram** share link and saves the **watermark-free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign-up, no ads.
 
 **Zero-bandwidth design**: the web page and every API consumer pull the MP4 **directly from each platform's CDN**. Our server only does the small HTML/JSON parse (~1 KB per video) — **no video bytes transit the server**.
 
@@ -22,7 +22,7 @@ Live at **[digitaldialogue.com.au](https://digitaldialogue.com.au/)**.
 
 ## Features
 
-- **Douyin, TikTok & X (Twitter)** — watermark-free MP4 via per-platform parsing
+- **Douyin, TikTok, X (Twitter) & Instagram** — watermark-free MP4 via per-platform parsing
 - **Zero hosting bandwidth** — video bytes flow browser ↔ platform CDN, not through us (see architecture below)
 - **Save to Photos on iPhone** — tap once, native Share Sheet opens with "Save Video"
 - **Progress prefetch** — the MP4 streams into memory during render so the save click can call `navigator.share()` synchronously (avoids Safari's NotAllowedError from expired user activation)
@@ -39,6 +39,7 @@ Each platform has a public endpoint that hands us the CDN URL without authentica
 | Douyin   | `www.douyin.com` | server-side `aweme.snssdk.com/aweme/v1/play/` 302 follow | `*.zjcdn.com` / `*.douyinvod.com` | `*` | ~5 min signed |
 | TikTok   | `www.tiktok.com` | server-side `www.tiktok.com/aweme/v1/play/` 302 follow (cookieless variant) | `*.tiktokcdn-us.com` | `*` | ~5 min signed |
 | X (Twitter) | `cdn.syndication.twimg.com/tweet-result` (oEmbed-style API, no auth) | direct MP4 URL in the JSON response — no 302 | `video.twimg.com` (Cloudflare) | `*` | **1 week** (`max-age=604800`) |
+| Instagram | `instagram.com/graphql/query` (`doc_id=8845758582119845`, csrftoken cookie warmup) | direct MP4 URL in the JSON response | `*.cdninstagram.com` | `*` | ~30 min signed |
 
 **Douyin**: `aweme.snssdk.com` has no CORS headers so browsers can't follow its 302 from JS. The redirect target does have ACAO `*` and accepts requests with no Referer (CDN rejects cross-origin Referer as anti-hotlink). We do the follow once server-side.
 
@@ -46,13 +47,16 @@ Each platform has a public endpoint that hands us the CDN URL without authentica
 
 **X (Twitter)**: easiest by far. The same `cdn.syndication.twimg.com/tweet-result?id=…` endpoint that powers `publish.twitter.com` returns a JSON with `video.variants[]` listing direct MP4 URLs at multiple resolutions (480p / 720p / 1080p). No 302, no signature, no cookie — just public Cloudflare-cached assets that browsers can `fetch()` directly. We pick the highest resolution.
 
+**Instagram**: most fragile of the four. We POST to `instagram.com/graphql/query/` with `doc_id=8845758582119845` (the same internal doc id Instagram's own embed iframe uses) — the response is JSON with `data.xdt_shortcode_media.video_url` pointing at a `*.cdninstagram.com` signed MP4 (CORS `*`, no header requirements). Two caveats: (1) graphql is **aggressively rate-limited** at the IP level — heavy traffic may hit 429 and we surface that as a graceful error; (2) Instagram rotates the `doc_id` every few months. When it breaks, look up the current value at [yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py) (search for `doc_id`). Carousel posts return the first video child.
+
 ```
 Browser                  Netlify Function              Platform
 ───────                  ────────────────              ──────────
   │                            │                          │
   ├─ POST /parse ────────────> │                          │
   │                            ├─ extract video URL       │  Douyin/TikTok: page+302
-  │                            │  (per-platform path) ──> │  Twitter: syndication API
+  │                            │  (per-platform path) ──> │  Twitter:   syndication API
+  │                            │                          │  Instagram: graphql doc_id
   │<── { direct_cdn_url, … } ──│                          │
   │                                                       │
   ├─ GET direct_cdn_url (no Referer, no cookies) ──────> │
@@ -87,7 +91,7 @@ Tap **Add Shortcut** → done. The Shortcut is named *Save to Photos* and is pre
 
 #### Use it
 
-Open Douyin / TikTok / X → tap any video's **Share** button → swipe the Shortcuts row and pick yours → a few seconds later the video is in Photos. If you just have a share link on the clipboard, run the Shortcut from the home screen / widget instead.
+Open Douyin / TikTok / X / Instagram → tap any video's **Share** button → swipe the Shortcuts row and pick yours → a few seconds later the video is in Photos. If you just have a share link on the clipboard, run the Shortcut from the home screen / widget instead.
 
 > ⚠️ **Don't tap the ▶ Play button in the Shortcuts editor to test.** It runs without Share Sheet input, so step 1 silently falls through to Clipboard — if that doesn't contain a supported link you'll get a confusing error. Always test via the real share menu.
 
@@ -104,7 +108,7 @@ Open the **Shortcuts** app → tap **+** to create a new Shortcut.
 Then add these 4 actions:
 
 1. **Receive Text from Share Sheet** — type Text; if no input → **Get Clipboard**.
-2. **Match Text** — pattern `https?:\/\/(?:v\.douyin\.com|(?:www\.|vm\.)?tiktok\.com|(?:www\.|mobile\.)?(?:twitter|x)\.com|t\.co)\/[^\s]+` against **Shortcut Input**.
+2. **Match Text** — pattern `https?:\/\/(?:v\.douyin\.com|(?:www\.|vm\.)?tiktok\.com|(?:www\.|mobile\.)?(?:twitter|x)\.com|t\.co|(?:www\.)?instagram\.com)\/[^\s]+` against **Shortcut Input**.
 3. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` + **Matches** variable. Method: **GET**.
 4. **Save to Photo Album** — input **Contents of URL** → album **Recents**.
 
@@ -170,7 +174,8 @@ Drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop) — Ne
 - **Prefetch the full MP4 on parse, not on save click.** `navigator.share()` requires transient user activation (~5s from click). Awaiting a multi-MB download inside the click handler blows past that window and Safari throws `NotAllowedError`. Prefetching means the save click calls `share()` synchronously.
 - **`referrerPolicy: 'no-referrer'` everywhere (for Douyin / TikTok).** Both platforms' CDN anti-hotlink filters accept a request with no Referer but 403 any cross-origin one. We set the policy on the prefetch `fetch()` and use a 302 for the Shortcut endpoint (HTTP clients don't add Referer when following 302s). Twitter's `video.twimg.com` doesn't care about Referer, but the policy is harmless.
 - **Server-resolve the play-redirect 302.** The redirect endpoints (Douyin: `aweme.snssdk.com`; TikTok: `www.tiktok.com/aweme/v1/play/`) either lack CORS headers or serve different Locations based on cookies, so the browser can't reliably follow them. We do the follow once server-side and hand the resulting cookieless CDN URL to the client. Twitter skips this step — `cdn.syndication.twimg.com/tweet-result` returns the final CDN URL directly in JSON.
-- **Per-platform User-Agent.** TikTok and Twitter syndication 403 mobile UAs and need desktop Chrome. Douyin is the opposite — its mobile-share endpoint expects an iPhone Safari UA.
+- **Per-platform User-Agent.** TikTok, Twitter syndication, and Instagram graphql all 403 mobile UAs and need desktop Chrome. Douyin is the opposite — its mobile-share endpoint expects an iPhone Safari UA.
+- **Instagram is "best effort".** Unlike the other three platforms which have stable public APIs, IG's graphql endpoint is rate-limited per IP and rotates the `doc_id` periodically. When the parser breaks, check yt-dlp for the new value. Public posts/reels work; private accounts, age-restricted, region-locked, and Stories don't.
 
 ## License
 

@@ -2,14 +2,14 @@
 // to fetch the video directly from the platform's CDN, so a Shortcut never
 // pulls the MP4 bytes through our server.
 //   GET /api/info?url=<share_link>
-// Supports Douyin, TikTok, and Twitter / X.
+// Supports Douyin, TikTok, Twitter / X, and Instagram (posts/reels).
 
 import { parseShareLink, MOBILE_UA, DESKTOP_UA } from './_lib.mjs';
 
 export default async (req) => {
   const url = new URL(req.url);
   const share = url.searchParams.get('url') || url.searchParams.get('u');
-  if (!share) return json(400, { error: 'missing url param, e.g. ?url=https://v.douyin.com/xxxxx/ or https://x.com/.../status/...' });
+  if (!share) return json(400, { error: 'missing url param, e.g. ?url=https://v.douyin.com/xxxxx/ or https://x.com/.../status/... or https://www.instagram.com/reel/.../' });
 
   let parsed;
   try {
@@ -27,17 +27,17 @@ export default async (req) => {
     ? `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(parsed.vid)}&ratio=720p&line=0`
     : null;
 
-  // Per-platform UA hint — TikTok page-fetch requires desktop Chrome,
-  // Douyin requires mobile, Twitter video.twimg.com accepts anything.
-  const ua = parsed.platform === 'tiktok' ? DESKTOP_UA
-           : parsed.platform === 'twitter' ? DESKTOP_UA
-           : MOBILE_UA;
+  // Per-platform UA hint — TikTok / Twitter / Instagram graphql-fetch all
+  // require desktop Chrome to avoid 403s; Douyin requires mobile. The CDN
+  // URLs themselves accept any UA (the UA only matters for the resolution
+  // step, which we do server-side).
+  const ua = parsed.platform === 'douyin' ? MOBILE_UA : DESKTOP_UA;
 
-  // Per-platform note. Twitter URLs are open Cloudflare-cached assets so
-  // the "no Referer / no cookies" advice doesn't apply (it doesn't hurt
-  // either, but it's misleading to imply it's required).
+  // Per-platform note about how the client should fetch the resolved URL.
   const note = parsed.platform === 'twitter'
     ? 'Standard GET — video.twimg.com is a public Cloudflare CDN with cache-control: max-age=604800.'
+    : parsed.platform === 'instagram'
+    ? 'Standard GET — *.cdninstagram.com serves Access-Control-Allow-Origin: * with no Referer/cookie/UA requirement.'
     : 'Send this request WITHOUT a Referer and WITHOUT cookies — the CDN serves a permissive variant only when neither is present.';
 
   return json(200, {

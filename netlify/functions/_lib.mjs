@@ -28,6 +28,7 @@ export function detectPlatform(rawUrl) {
   if (host.endsWith('tiktok.com')) return 'tiktok';
   if (host === 'twitter.com' || host.endsWith('.twitter.com') ||
       host === 'x.com' || host.endsWith('.x.com') || host === 't.co') return 'twitter';
+  if (host === 'instagram.com' || host.endsWith('.instagram.com')) return 'instagram';
   return 'unknown';
 }
 
@@ -283,6 +284,104 @@ async function parseTwitter(url) {
   };
 }
 
+// -------- Instagram parser --------
+
+async function parseInstagram(url) {
+  // Accept formats: instagram.com/p/<code>/, /reel/<code>/, /reels/<code>/,
+  // and the username-prefixed variants like /username/p/<code>/.
+  const codeMatch = url.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+  if (!codeMatch) throw new Error('未识别到 Instagram shortcode（仅支持 /p/、/reel/、/reels/ 链接）');
+  const shortcode = codeMatch[1];
+
+  // Step 1: warm csrftoken cookie. Instagram's graphql endpoint requires
+  // a csrftoken cookie + matching X-CSRFToken header even for unauth calls.
+  // A cold GET to instagram.com sets the cookie for free.
+  const warm = await fetch('https://www.instagram.com/', {
+    headers: { 'User-Agent': DESKTOP_UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+  });
+  const setCookie = warm.headers.get('set-cookie') || '';
+  const csrf = (setCookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
+  if (!csrf) throw new Error('Instagram csrftoken cookie 拿不到（可能 IP 被风控）');
+
+  // Step 2: graphql call. doc_id is a stable identifier maintained by yt-dlp;
+  // Instagram rotates these every few months — if this 4xx-es with a doc_id
+  // error, find the current value at:
+  //   github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py
+  // (search for `doc_id`)
+  const variables = JSON.stringify({
+    shortcode,
+    child_comment_count: 3,
+    fetch_comment_count: 40,
+    parent_comment_count: 24,
+    has_threaded_comments: true,
+  });
+  const body = new URLSearchParams({
+    doc_id: '8845758582119845',
+    variables,
+  });
+  const resp = await fetch('https://www.instagram.com/graphql/query/', {
+    method: 'POST',
+    headers: {
+      'User-Agent': DESKTOP_UA,
+      'X-IG-App-ID': '936619743392459',
+      'X-ASBD-ID': '198387',
+      'X-IG-WWW-Claim': '0',
+      'X-CSRFToken': csrf,
+      'X-Requested-With': 'XMLHttpRequest',
+      'Origin': 'https://www.instagram.com',
+      'Referer': `https://www.instagram.com/p/${shortcode}/`,
+      'Cookie': `csrftoken=${csrf}`,
+      'Accept': '*/*',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  });
+  if (resp.status === 429) {
+    throw new Error('Instagram 限流中，请稍后再试 (rate limited)');
+  }
+  if (!resp.ok) throw new Error(`Instagram graphql HTTP ${resp.status}`);
+  const data = await resp.json();
+  const media = data?.data?.xdt_shortcode_media;
+  if (!media) throw new Error('Instagram 未返回视频元数据（可能私密 / 删除 / 区域锁）');
+
+  // Single-video post or reel: video_url is at top level.
+  // Carousel post: edge_sidecar_to_children.edges[i].node.video_url. For now
+  // pick the first video in the carousel; warn user to specify if they want
+  // a different one (rare case).
+  let videoUrl = media.video_url;
+  let cover = media.thumbnail_src || media.display_url || '';
+  let usedCarouselIndex = null;
+  if (!videoUrl) {
+    const sidecar = media.edge_sidecar_to_children?.edges || [];
+    const videoChild = sidecar.find((e) => e.node?.is_video && e.node?.video_url);
+    if (videoChild) {
+      videoUrl = videoChild.node.video_url;
+      cover = videoChild.node.thumbnail_src || videoChild.node.display_url || cover;
+      usedCarouselIndex = sidecar.indexOf(videoChild);
+    }
+  }
+  if (!videoUrl) {
+    throw new Error('该帖子不含视频（仅图片）');
+  }
+
+  const captionEdges = media.edge_media_to_caption?.edges || [];
+  const caption = captionEdges[0]?.node?.text || '';
+  const owner = media.owner?.username || '';
+  const title = (caption || (owner ? `@${owner} on Instagram` : 'Instagram video')).slice(0, 200);
+
+  return {
+    platform: 'instagram',
+    title: usedCarouselIndex !== null ? `[carousel #${usedCarouselIndex + 1}] ${title}` : title,
+    cover: cover.replace(/^http:/, 'https:'),
+    item_id: media.id || shortcode,
+    video_id: shortcode,
+    vid: shortcode,
+    // *.cdninstagram.com URLs serve `Access-Control-Allow-Origin: *` and accept
+    // requests with no Referer / no cookie / any UA. Browser fetches direct.
+    resolvedCdnUrl: videoUrl,
+  };
+}
+
 // -------- Entry points --------
 
 export async function parseShareLink(rawText) {
@@ -301,5 +400,6 @@ export async function parseShareLink(rawText) {
   if (platform === 'douyin') return parseDouyin(url);
   if (platform === 'tiktok') return parseTikTok(url);
   if (platform === 'twitter') return parseTwitter(url);
-  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok / Twitter only)');
+  if (platform === 'instagram') return parseInstagram(url);
+  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok / Twitter / Instagram only)');
 }
