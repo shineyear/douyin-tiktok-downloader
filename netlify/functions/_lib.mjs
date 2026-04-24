@@ -336,8 +336,12 @@ async function parseInstagram(url) {
     },
     body: body.toString(),
   });
-  if (resp.status === 429) {
-    throw new Error('Instagram 限流中，请稍后再试 (rate limited)');
+  // Instagram rate-limits the graphql endpoint at the IP level. On shared
+  // Netlify IPs this triggers after just a few requests — 429 is the honest
+  // answer but IG also returns 401 ("require_login") as a soft-rate-limit.
+  // Surface both as the same user-facing "try again later" error.
+  if (resp.status === 429 || resp.status === 401) {
+    throw new Error('Instagram 风控中，请 10-30 分钟后再试 (IG rate-limited our IP pool; this is a known IG restriction for any shared-IP service, not a bug)');
   }
   if (!resp.ok) throw new Error(`Instagram graphql HTTP ${resp.status}`);
   const data = await resp.json();

@@ -47,7 +47,11 @@ Each platform has a public endpoint that hands us the CDN URL without authentica
 
 **X (Twitter)**: easiest by far. The same `cdn.syndication.twimg.com/tweet-result?id=…` endpoint that powers `publish.twitter.com` returns a JSON with `video.variants[]` listing direct MP4 URLs at multiple resolutions (480p / 720p / 1080p). No 302, no signature, no cookie — just public Cloudflare-cached assets that browsers can `fetch()` directly. We pick the highest resolution.
 
-**Instagram**: most fragile of the four. We POST to `instagram.com/graphql/query/` with `doc_id=8845758582119845` (the same internal doc id Instagram's own embed iframe uses) — the response is JSON with `data.xdt_shortcode_media.video_url` pointing at a `*.cdninstagram.com` signed MP4 (CORS `*`, no header requirements). Two caveats: (1) graphql is **aggressively rate-limited** at the IP level — heavy traffic may hit 429 and we surface that as a graceful error; (2) Instagram rotates the `doc_id` every few months. When it breaks, look up the current value at [yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py) (search for `doc_id`). Carousel posts return the first video child.
+**Instagram**: most fragile of the four. We POST to `instagram.com/graphql/query/` with `doc_id=8845758582119845` (the same internal doc id Instagram's own embed iframe uses) — the response is JSON with `data.xdt_shortcode_media.video_url` pointing at a `*.cdninstagram.com` signed MP4 (CORS `*`, no header requirements). Three caveats:
+
+1. **IP-level rate limiting on the graphql endpoint.** Shared Netlify IPs get flagged fast — typically the first call works, the next one or two 401 ("require_login") or 429. Both are soft rate-limit signals and we surface them as "请 10-30 分钟后再试". Usually clears within ~30 minutes. Not fixable structurally unless you run on your own IP (VPS) with light traffic, or add per-shortcode caching.
+2. **doc_id rotates every few months.** When the parser starts 400-ing with a `doc_id not found` body, look up the current value at [yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py) (search for `doc_id`).
+3. **Carousel posts** return the first video child. **Stories / Highlights / private / age-restricted / region-locked** content fails with "未返回视频元数据".
 
 ```
 Browser                  Netlify Function              Platform
