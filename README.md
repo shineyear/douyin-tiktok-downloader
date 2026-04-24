@@ -75,44 +75,38 @@ The server 302-redirects to the CDN; the Shortcut's HTTP client follows the redi
   <img src="screenshots/ios-shortcut.jpg" width="320" alt="iOS Shortcut configuration">
 </p>
 
-Build a 4-action Shortcut exactly as shown above. On iPhone: open the **Shortcuts** app → tap **+** to create a new Shortcut.
+#### One-tap install (recommended)
 
-#### First: enable it in the Share Sheet (this is NOT an action)
+Open this link on your iPhone in **Safari** (not Chrome):
 
-Tap the **ⓘ info icon** at the bottom of the editor → toggle **Show in Share Sheet** on → for **Share Sheet Types** keep **only Text** checked and uncheck everything else (including URLs). Name it e.g. *Save to Photos*.
+→ **[icloud.com/shortcuts/677ab543c5894e50ad3c7acc0b9640ce](https://www.icloud.com/shortcuts/677ab543c5894e50ad3c7acc0b9640ce)**
 
-> ⚠️ This is a gotcha — "Receive Input" is a Shortcut **setting**, not an action you can search for. If you skip it, the Shortcut won't appear in Douyin's share menu.
->
-> ⚠️ **Accept Text, not URLs.** Douyin's share blob looks like `8.97 复制打开抖音… https://v.douyin.com/XXXX/ S@Y.MW YMW:/ 12/07`. If you accept URLs, iOS auto-extracts `S@Y.MW` as `mailto:S@Y.MW` and you'll hit the error *"URL is missing a hostname"* before your actions even run.
+Tap **Add Shortcut** → done. The Shortcut is named *Save to Photos* and is pre-wired with the regex below + every setting in place.
 
-#### Then: add these 4 actions in order
-
-**1. Receive Text from Share Sheet**
-- Action: *Receive input from Share Sheet*
-- Type: **Text**
-- If there's no input: **Get Clipboard** (so it also works when you copy a share link instead of tapping Share)
-
-**2. Match Text** (this is where the URL gets extracted)
-- Action: *Match Text*
-- Pattern: `https?:\/\/(?:v\.douyin\.com|(?:www\.|vm\.)?tiktok\.com|(?:www\.|mobile\.)?(?:twitter|x)\.com|t\.co)\/[^\s]+`
-- Input: **Shortcut Input**
-
-This regex pulls the Douyin / TikTok / X URL out of the mixed text blob (e.g. `8.97 ... https://v.douyin.com/XXXX/ S@Y.MW YMW:/ 12/07`). Without it the whole blob gets URL-encoded and the API can't parse anything.
-
-**3. Get Contents of URL**
-- URL: `https://digitaldialogue.com.au/api/download?url=` followed by the **Matches** variable from step 2
-- Method: **GET** (default; Shortcuts URL-encodes the appended variable automatically)
-
-**4. Save to Photo Album**
-- Action: *Save to Photo Album*
-- Input: **Contents of URL** from step 3
-- Album: **Recents** (or any album you prefer)
+> ⚠️ **iOS Photos sorts the Library by capture date, not save date.** A video posted a week ago will land where last week's photos are, not at the top. To see what you just saved, look in **Photos → Albums → Recents** (sorted by add date) or scroll Library.
 
 #### Use it
 
 Open Douyin / TikTok / X → tap any video's **Share** button → swipe the Shortcuts row and pick yours → a few seconds later the video is in Photos. If you just have a share link on the clipboard, run the Shortcut from the home screen / widget instead.
 
-> ⚠️ **Don't tap the ▶ Play button in the editor to test.** It runs without Share Sheet input, so step 1 silently falls through to Clipboard — if that doesn't contain a supported link you'll get a confusing error. Always test via the real share menu.
+> ⚠️ **Don't tap the ▶ Play button in the Shortcuts editor to test.** It runs without Share Sheet input, so step 1 silently falls through to Clipboard — if that doesn't contain a supported link you'll get a confusing error. Always test via the real share menu.
+
+#### Building it manually (if you can't import the iCloud link)
+
+Open the **Shortcuts** app → tap **+** to create a new Shortcut.
+
+**First: enable Share Sheet in settings (NOT in actions).** Tap the **ⓘ info icon** at the bottom of the editor → toggle **Show in Share Sheet** on → for **Share Sheet Types** keep **only Text** checked and uncheck everything else (including URLs). Name it e.g. *Save to Photos*.
+
+> ⚠️ "Receive Input" is a Shortcut **setting**, not an action you can search for. If you skip the toggle above, the Shortcut won't appear in any app's share menu.
+>
+> ⚠️ **Accept Text, not URLs.** Douyin's share blob looks like `8.97 复制打开抖音… https://v.douyin.com/XXXX/ S@Y.MW YMW:/ 12/07`. If you accept URLs, iOS auto-extracts `S@Y.MW` as `mailto:S@Y.MW` and you'll hit *"URL is missing a hostname"*.
+
+Then add these 4 actions:
+
+1. **Receive Text from Share Sheet** — type Text; if no input → **Get Clipboard**.
+2. **Match Text** — pattern `https?:\/\/(?:v\.douyin\.com|(?:www\.|vm\.)?tiktok\.com|(?:www\.|mobile\.)?(?:twitter|x)\.com|t\.co)\/[^\s]+` against **Shortcut Input**.
+3. **Get Contents of URL** — `https://digitaldialogue.com.au/api/download?url=` + **Matches** variable. Method: **GET**.
+4. **Save to Photo Album** — input **Contents of URL** → album **Recents**.
 
 ### `/api/info` — same zero bandwidth, but returns JSON if you want finer control
 
