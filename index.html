@@ -178,6 +178,20 @@
       color: #888;
       font-size: 14px;
     }
+    .credit {
+      margin-top: 48px;
+      padding: 12px 0 env(safe-area-inset-bottom);
+      text-align: center;
+      font-size: 12px;
+      color: #555;
+    }
+    .credit a {
+      color: #888;
+      text-decoration: none;
+      border-bottom: 1px dotted #444;
+      padding-bottom: 1px;
+    }
+    .credit a:hover { color: #ff0050; border-bottom-color: #ff0050; }
   </style>
 </head>
 <body>
@@ -196,6 +210,10 @@
   </div>
 
   <div id="result" class="result"></div>
+
+  <footer class="credit">
+    Made by <a href="https://landfirst.ai" target="_blank" rel="noopener">LandFirst.ai</a>
+  </footer>
 
 <script>
   const I18N = {
