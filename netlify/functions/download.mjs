@@ -28,12 +28,24 @@ export default async (req) => {
     return plain(502, `could not resolve ${parsed.platform} CDN URL`);
   }
 
+  // Netlify edge appends the original request query string to the Location
+  // header when the redirect target has NO query string of its own (seen
+  // in production: our Twitter MP4 URL is a clean path, Netlify rewrites
+  // the Location to `cdn.../video.mp4?url=https%3A%2F%2Fx.com%2F...`).
+  // Twitter CDN tolerates the junk param but iOS Shortcut's HTTP client
+  // mis-handles it and saves the response as a JPEG. Pre-empt by adding a
+  // benign cache-buster so the URL already has a query and merge skips.
+  // Douyin / TikTok URLs already carry signed query strings, so this is
+  // a no-op for them.
+  let cdnUrl = parsed.resolvedCdnUrl;
+  if (!cdnUrl.includes('?')) cdnUrl += `?_=${Date.now()}`;
+
   // 302 — client follows to the CDN. Bytes never touch this function.
   // Referrer-Policy: no-referrer as a belt-and-braces hint for browsers.
   return new Response(null, {
     status: 302,
     headers: {
-      'Location': parsed.resolvedCdnUrl,
+      'Location': cdnUrl,
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',
       'X-Video-Id': parsed.video_id || '',
