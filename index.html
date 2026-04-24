@@ -532,7 +532,15 @@
       // proxy — halves Netlify bandwidth per video.
       videoState.blobUrl = URL.createObjectURL(blob);
       const vid = document.getElementById('vid');
-      if (vid) vid.src = videoState.blobUrl;
+      if (vid) {
+        vid.src = videoState.blobUrl;
+        // Force the browser to decode metadata + first frame so the preview
+        // renders even when the platform's poster URL is blocked by
+        // Cross-Origin-Resource-Policy (IG's cdninstagram JPEGs are served
+        // with CORP: same-origin — silently fail cross-origin img loads).
+        vid.preload = 'metadata';
+        vid.load();
+      }
       if (btn) {
         btn.disabled = false;
         btn.textContent = t('save');
