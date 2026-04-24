@@ -1,12 +1,20 @@
-// Shared core used by parse.js (HTTP handler), video.mjs (streaming proxy),
-// download.mjs (one-shot Shortcut endpoint), and info.mjs (metadata).
-// Douyin-only: TikTok's CDN requires session cookies the browser can't
-// replay, which forces all bytes through our proxy and defeats the
-// zero-bandwidth design. We dropped TikTok.
+// Shared core for parse.js, download.mjs, info.mjs.
+// Both Douyin and TikTok use the same trick: their share-link host has a
+// 302 endpoint (Douyin: aweme.snssdk.com/play, TikTok: www.tiktok.com/aweme/v1/play)
+// that — when called WITHOUT cookies — redirects to a cookieless CDN URL with
+// Access-Control-Allow-Origin:* and no anti-hotlink Referer check. We resolve
+// that 302 server-side and hand the final URL to the client, which fetches the
+// MP4 bytes directly from the CDN. Netlify egress per video: ~1 KB JSON.
 
 export const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
+
+// TikTok's anti-bot 403s mobile UAs on the page-fetch step. Desktop Chrome
+// passes consistently across every account/year we tested.
+export const DESKTOP_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 export function extractUrl(text) {
   const m = String(text).match(/https?:\/\/[^\s，,）)】\]]+/);
@@ -17,7 +25,7 @@ export function detectPlatform(rawUrl) {
   let host = '';
   try { host = new URL(rawUrl).hostname.toLowerCase(); } catch { return 'unknown'; }
   if (host.endsWith('douyin.com') || host.endsWith('iesdouyin.com')) return 'douyin';
-  if (host.endsWith('tiktok.com')) return 'tiktok-unsupported';
+  if (host.endsWith('tiktok.com')) return 'tiktok';
   return 'unknown';
 }
 
@@ -95,12 +103,9 @@ async function parseDouyin(url) {
     (videoObj.cover?.url_list?.[0]) ||
     (videoObj.origin_cover?.url_list?.[0]) || '';
 
-  // Follow the aweme.snssdk.com/play 302 here so the browser doesn't have
-  // to. aweme.snssdk.com has NO CORS headers on its 302, so a browser
-  // fetch of it fails with "Failed to fetch". The redirect target
-  // (v5-dy-o-abtest.zjcdn.com etc.) advertises Access-Control-Allow-Origin:*
-  // so the browser can fetch it directly — but only if the request carries
-  // no Referer (the CDN rejects cross-origin Referer as anti-hotlinking).
+  // aweme.snssdk.com/play has NO CORS headers on its 302, so a browser can't
+  // follow it from JS. The redirect target advertises ACAO:* and accepts
+  // requests with no Referer. We do the follow once server-side.
   let resolvedCdnUrl = null;
   try {
     const head = await fetch(
@@ -111,7 +116,7 @@ async function parseDouyin(url) {
       const loc = head.headers.get('location');
       if (loc) resolvedCdnUrl = loc.replace(/^http:/, 'https:');
     }
-  } catch (_) { /* best effort; proxy path still works as fallback */ }
+  } catch (_) { /* parse still succeeds; client just won't have direct URL */ }
 
   return {
     platform: 'douyin',
@@ -124,6 +129,95 @@ async function parseDouyin(url) {
   };
 }
 
+// -------- TikTok parser --------
+
+async function parseTikTok(url) {
+  // Step 1: fetch the page with desktop Chrome UA. Mobile UAs get 403'd.
+  // No cookies sent (Node fetch has no cookie jar), which is what we want
+  // — we'll also call the play endpoint cookieless below to get the
+  // permissive-CDN redirect target instead of the chain-token one.
+  const resp = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': DESKTOP_UA,
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip',
+    },
+  });
+  if (!resp.ok) throw new Error(`TikTok page fetch failed: HTTP ${resp.status}`);
+  const finalUrl = resp.url;
+  const html = await resp.text();
+
+  // Step 2: extract __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON.
+  const dataMatch = html.match(
+    /<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]+?)<\/script>/,
+  );
+  if (!dataMatch) throw new Error('TikTok page structure changed — no UNIVERSAL_DATA tag');
+
+  let parsed;
+  try { parsed = JSON.parse(dataMatch[1]); }
+  catch (e) { throw new Error(`TikTok JSON parse failed: ${e.message}`); }
+
+  const itemStruct =
+    parsed?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+  if (!itemStruct) throw new Error('TikTok video data not in page (private/deleted/region-locked?)');
+
+  const video = itemStruct.video || {};
+  const itemId =
+    itemStruct.id ||
+    finalUrl.match(/\/video\/(\d+)/)?.[1] ||
+    '';
+
+  // Step 3: find the aweme/v1/play URL. It's always present in bitrateInfo
+  // alongside the cookie-gated v16/v19 hosts. Same shape across every video
+  // we tested (2021–2026, US/intl creators, ad/non-ad, verified/non-verified).
+  let playApiUrl = null;
+  for (const br of video.bitrateInfo || []) {
+    for (const u of br?.PlayAddr?.UrlList || []) {
+      if (typeof u === 'string' && u.includes('/aweme/v1/play')) {
+        playApiUrl = u; break;
+      }
+    }
+    if (playApiUrl) break;
+  }
+  if (!playApiUrl) throw new Error('TikTok play API URL not found in bitrateInfo');
+
+  // Step 4: follow the play API redirect WITHOUT cookies. TikTok serves a
+  // different 302 Location based on whether tt_chain_token cookie is present:
+  //   with cookie    → v16-webapp-prime.us.tiktok.com (cookie-gated, 403 cold)
+  //   without cookie → v16m-default.tiktokcdn-us.com (signed URL, ACAO:*, cold-fetchable)
+  // Node fetch defaults to no cookies, so we just don't include any.
+  let resolvedCdnUrl = null;
+  try {
+    const head = await fetch(playApiUrl, {
+      redirect: 'manual',
+      headers: { 'User-Agent': DESKTOP_UA },
+    });
+    if (head.status >= 300 && head.status < 400) {
+      const loc = head.headers.get('location');
+      if (loc) resolvedCdnUrl = loc.replace(/^http:/, 'https:');
+    }
+  } catch (_) { /* parse still succeeds; client just won't have direct URL */ }
+
+  // Sanity: if we got a chain-token URL by mistake, the cookieless trick
+  // misfired (e.g. TikTok changed behavior). Refuse rather than hand the
+  // client a URL it can't fetch.
+  if (resolvedCdnUrl && resolvedCdnUrl.includes('tt_chain_token')) {
+    resolvedCdnUrl = null;
+  }
+
+  return {
+    platform: 'tiktok',
+    title: (itemStruct.desc || 'TikTok video').slice(0, 200),
+    cover: (video.cover || video.originCover || '').replace(/^http:/, 'https:'),
+    item_id: itemId,
+    video_id: video.id || video.videoID || itemId,
+    vid: video.id || video.videoID || '',
+    resolvedCdnUrl,
+  };
+}
+
 // -------- Entry points --------
 
 export async function parseShareLink(rawText) {
@@ -131,7 +225,7 @@ export async function parseShareLink(rawText) {
   if (!url) throw new Error('未识别到有效链接');
 
   let platform = detectPlatform(url);
-  if (platform === 'unknown' || platform === 'tiktok-unsupported') {
+  if (platform === 'unknown') {
     // Short URL may need redirect resolution before we know the host.
     try {
       const r = await fetch(url, { method: 'HEAD', redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
@@ -139,13 +233,7 @@ export async function parseShareLink(rawText) {
     } catch { /* ignore */ }
   }
 
-  if (platform === 'tiktok-unsupported') {
-    throw new Error('仅支持抖音链接 / Only Douyin links are supported');
-  }
-  if (platform !== 'douyin') {
-    throw new Error('不支持的链接 / Unsupported link');
-  }
-
-  return parseDouyin(url);
+  if (platform === 'douyin') return parseDouyin(url);
+  if (platform === 'tiktok') return parseTikTok(url);
+  throw new Error('不支持的链接 / Unsupported link (Douyin / TikTok only)');
 }
-

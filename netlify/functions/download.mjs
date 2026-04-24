@@ -1,19 +1,20 @@
 // One-shot download endpoint for iOS Shortcuts & other API consumers.
 //   GET /api/download?url=<share_link>
-// We parse the share link and 302-redirect to the resolved CDN URL.
-// The HTTP client (Shortcut, curl, etc.) follows the redirect and pulls
-// the MP4 directly from the CDN — zero Netlify egress for the bytes.
+// Supports Douyin and TikTok. We parse the share link and 302-redirect to
+// the resolved CDN URL. The HTTP client (Shortcut, curl, etc.) follows the
+// redirect and pulls the MP4 directly from the CDN — zero Netlify egress
+// for the bytes.
 //
-// Douyin's CDN (v5-dy-o-abtest.zjcdn.com / v*.douyinvod.com) rejects any
-// cross-origin Referer, but HTTP clients don't add a Referer header when
-// following a server 302 (verified with curl -L), so the follow succeeds.
+// Both platforms' CDNs (Douyin's *.zjcdn.com / *.douyinvod.com, TikTok's
+// *.tiktokcdn-us.com) reject cross-origin Referer headers, but HTTP clients
+// don't add Referer when following a server 302, so the follow succeeds.
 
 import { parseShareLink } from './_lib.mjs';
 
 export default async (req) => {
   const url = new URL(req.url);
   const share = url.searchParams.get('url') || url.searchParams.get('u');
-  if (!share) return plain(400, 'missing url param, e.g. ?url=https://v.douyin.com/xxxxx/');
+  if (!share) return plain(400, 'missing url param, e.g. ?url=https://v.douyin.com/xxxxx/ or https://www.tiktok.com/t/xxxxx/');
 
   let parsed;
   try {
@@ -23,7 +24,7 @@ export default async (req) => {
   }
 
   if (!parsed.resolvedCdnUrl) {
-    return plain(502, 'could not resolve Douyin CDN URL');
+    return plain(502, `could not resolve ${parsed.platform} CDN URL`);
   }
 
   // 302 — client follows to the CDN. Bytes never touch this function.
