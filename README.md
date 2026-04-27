@@ -138,6 +138,60 @@ GET https://digitaldialogue.com.au/api/info?url=<share_link>
 
 Use this if you want to inspect metadata (title, cover, video_id) inside your Shortcut before fetching, or if you want to set a custom User-Agent.
 
+## MCP for AI assistants
+
+A [Model Context Protocol](https://modelcontextprotocol.io) server exposes the same parser as a tool any AI assistant can call directly — paste a share link into Claude / ChatGPT / Cursor / Cline, the AI calls our `download_video` tool, gets the CDN URL, and hands it to you.
+
+```
+POST https://digitaldialogue.com.au/mcp
+Content-Type: application/json
+```
+
+Streamable HTTP transport, JSON-RPC 2.0, stateless, no auth (the underlying API is already public). Same zero-bandwidth principle as the `/api/*` endpoints — tool calls return the CDN URL; bytes flow client ↔ platform CDN.
+
+### Connect
+
+**Claude.ai (web / desktop / mobile):**
+1. Open https://claude.ai/customize/connectors
+2. **Add custom connector** → URL `https://digitaldialogue.com.au/mcp` → save
+3. The `download_video` tool is now available in any conversation
+
+**Claude Code / Cursor / Cline / any MCP client:** add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "digitaldialogue": {
+      "type": "http",
+      "url": "https://digitaldialogue.com.au/mcp"
+    }
+  }
+}
+```
+
+### Tool
+
+| Name | Input | Output |
+|------|-------|--------|
+| `download_video` | `share_url` (string) | `{ platform, title, cdn_url, cover_image_url, video_id, item_id, recommended_user_agent, cdn_lifetime_seconds, suggested_filename }` |
+
+Errors surface as `isError: true` tool results with the same human-readable messages used by `/api/info` (e.g. `Instagram 风控中，请 10-30 分钟后再试` for the documented IG IP-pool rate-limit).
+
+### Probe it
+
+```
+$ curl https://digitaldialogue.com.au/mcp
+{
+  "name": "digitaldialogue",
+  "title": "Douyin / TikTok / X / Instagram Video Downloader",
+  "version": "1.0.0",
+  "protocol": "mcp-streamable-http",
+  "protocol_version": "2025-06-18",
+  "transport": "POST application/json (JSON-RPC 2.0); single endpoint",
+  "tools": ["download_video"]
+}
+```
+
 ## Caching strategy (JSON metadata only — video bytes are never cached)
 
 Two layers, both keyed on the input share URL:
@@ -172,8 +226,11 @@ douyin_downloader/
 │   ├── _lib.mjs                # shared parser + 302 resolver
 │   ├── parse.js                # POST  → JSON with direct_cdn_url (used by the web UI)
 │   ├── download.mjs            # GET   → 302 redirect to CDN (simple Shortcut)
-│   └── info.mjs                # GET   → JSON with direct.url + headers (advanced Shortcut)
-├── netlify.toml                # Netlify config + /api/* redirects
+│   ├── info.mjs                # GET   → JSON with direct.url + headers (advanced Shortcut)
+│   └── mcp.mjs                 # POST  → MCP / JSON-RPC 2.0 (for AI assistants)
+├── netlify.toml                # Netlify config + /api/* and /mcp redirects
+├── scripts/
+│   └── health-check.sh         # 4-platform smoke test (probes /api/info)
 ├── sitemap.xml
 ├── robots.txt
 ├── screenshots/                # README assets

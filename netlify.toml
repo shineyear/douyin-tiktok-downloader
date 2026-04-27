@@ -27,3 +27,12 @@
   to = "/.netlify/functions/info"
   status = 200
   force = true
+
+# MCP (Model Context Protocol) endpoint — Streamable HTTP, JSON-RPC 2.0 over POST.
+# Connect from Claude.ai: customize/connectors → Add custom connector →
+# https://digitaldialogue.com.au/mcp
+[[redirects]]
+  from = "/mcp"
+  to = "/.netlify/functions/mcp"
+  status = 200
+  force = true
