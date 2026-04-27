@@ -151,12 +151,15 @@ Streamable HTTP transport, JSON-RPC 2.0, stateless, no auth (the underlying API 
 
 ### Connect
 
-**Claude.ai (web / desktop / mobile):**
-1. Open https://claude.ai/customize/connectors
-2. **Add custom connector** → URL `https://digitaldialogue.com.au/mcp` → save
-3. The `download_video` tool is now available in any conversation
+**Claude Code (recommended — one command):**
 
-**Claude Code / Cursor / Cline / any MCP client:** add to your MCP config:
+```bash
+claude mcp add --scope user digitaldialogue --transport http https://digitaldialogue.com.au/mcp
+```
+
+Then `claude mcp list` should show `digitaldialogue: ... ✓ Connected`. Restart any open Claude Code sessions to pick up the new tool.
+
+**Cursor / Cline / Continue / any other MCP client:** add to your MCP config (`~/.cursor/mcp.json`, `~/.cline/mcp.json`, etc.):
 
 ```json
 {
@@ -169,6 +172,27 @@ Streamable HTTP transport, JSON-RPC 2.0, stateless, no auth (the underlying API 
 }
 ```
 
+**Claude.ai web / desktop / mobile:** custom HTTP MCP servers can only be added via uploaded Plugin bundles (`Customize → Personal plugins → +`) — there is no "paste a URL" option in the current UI, and the Plugin path is gated by your account / org settings. If your `Customize → Personal plugins → + → Create plugin` menu doesn't expose an option for declaring an MCP server, you're out of luck on the web UI for now; use Claude Code instead.
+
+### How to use it
+
+In a Claude Code session (or any client where the MCP is connected), just talk to the assistant. It sees `download_video` as an available tool and decides when to call it.
+
+```
+> Download this video for me: https://www.tiktok.com/@9news/video/7283777168503573768
+
+> Save these 3 to ~/videos/:
+>   https://v.douyin.com/9zCRrjMtxL8
+>   https://www.instagram.com/reel/DUuJKDGjvw_/
+>   https://x.com/OpenAI/status/2047376561205325845
+
+> What's the title and platform of https://v.douyin.com/9zCRrjMtxL8 — don't actually download.
+
+> Give me just the direct CDN URL for https://x.com/WhiteHouse/status/2031895801064985021 so I can pipe it into ffmpeg.
+```
+
+Claude calls the tool, gets back `{ cdn_url, title, platform, ... }`, then uses `curl` / Bash / whatever to actually fetch (or just hands you the URL — depends on what you asked). The MP4 bytes flow CDN → your machine; this server is never in the byte path.
+
 ### Tool
 
 | Name | Input | Output |
@@ -176,6 +200,13 @@ Streamable HTTP transport, JSON-RPC 2.0, stateless, no auth (the underlying API 
 | `download_video` | `share_url` (string) | `{ platform, title, cdn_url, cover_image_url, video_id, item_id, recommended_user_agent, cdn_lifetime_seconds, suggested_filename }` |
 
 Errors surface as `isError: true` tool results with the same human-readable messages used by `/api/info` (e.g. `Instagram 风控中，请 10-30 分钟后再试` for the documented IG IP-pool rate-limit).
+
+### Troubleshooting
+
+- **"I don't have a download_video tool"** — the Claude session was started before the MCP was added. Quit and re-open it (or in Claude Code: `:q` then `claude` again).
+- **"Instagram 风控中，请 10-30 分钟后再试" / `require_login` / 401 / 429** — IG rate-limits shared-IP services at the GraphQL endpoint. Wait 10-30 min and retry. Same as `/api/info`; not a parser bug.
+- **TikTok video unavailable** — private, deleted, or region-locked. Check the URL in a browser first.
+- **Cold-start delay 1-2 s on the first call** — Netlify wakes the function. Subsequent calls are fast (in-process + edge cache).
 
 ### Probe it
 
