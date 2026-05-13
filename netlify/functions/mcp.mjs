@@ -23,16 +23,21 @@ const CAPABILITIES = { tools: {} };
 const TOOLS = [
   {
     name: 'download_video',
-    title: 'Download video from Douyin / TikTok / X / Instagram',
+    title: 'Download video or images from Douyin / TikTok / X / Instagram',
     description: [
       'Resolves a share link from Douyin (抖音), TikTok, X (Twitter), or Instagram',
-      "to its watermark-free MP4 URL on the platform's CDN. Returns metadata (title,",
-      'platform, video ID, cover image) plus the direct CDN URL.',
+      "to its watermark-free media URL(s) on the platform's CDN. Returns metadata",
+      '(title, platform, IDs, cover image) plus either a direct video CDN URL or, for',
+      'Douyin 图文/图集 (image carousel) posts, an array of image URLs.',
+      '',
+      'Output shape branches on `media_type`:',
+      "  - 'video' → `cdn_url` is the direct MP4 URL (always set for video posts)",
+      "  - 'images' → `images[]` lists each photo's CDN URL; `cdn_url` is omitted",
       '',
       'Zero-bandwidth: this server only does a small (~1 KB) HTML/JSON parse — the',
-      'caller fetches the actual video bytes directly from the platform CDN. CDN URLs',
-      'are valid for ~5 min (Douyin / TikTok signed), ~30 min (Instagram), or 1 week',
-      '(X / Twitter video.twimg.com).',
+      'caller fetches the actual bytes directly from the platform CDN. CDN URL lifetime:',
+      '~5 min (Douyin / TikTok signed), ~30 min (Instagram), 1 week (X / video.twimg.com),',
+      '~1 h (Douyin image carousel signed URLs).',
       '',
       'Supports share-link hosts: v.douyin.com, www.douyin.com, www.tiktok.com,',
       'vm.tiktok.com (short), x.com, twitter.com, t.co (tweet redirects),',
@@ -42,7 +47,7 @@ const TOOLS = [
       'endpoint — error message will mention "Instagram 风控中" / "10-30 分钟" /',
       '"rate-limit" / "require_login". This is documented platform behavior; retry',
       'in 10-30 min. TikTok private videos and IG private / region-locked content',
-      'are not retrievable. Carousel posts: returns the first video child.',
+      'are not retrievable. IG video carousels: returns the first video child.',
     ].join('\n'),
     inputSchema: {
       type: 'object',
@@ -58,8 +63,24 @@ const TOOLS = [
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['douyin', 'tiktok', 'twitter', 'instagram'] },
+        media_type: { type: 'string', enum: ['video', 'images'], description: "'video' for a single MP4 (cdn_url is set), 'images' for a Douyin 图文/图集 photo carousel (images[] is set)." },
         title: { type: 'string' },
-        cdn_url: { type: 'string', description: "Direct video URL on the platform's CDN. Fetch with no cookies and no Referer (the recommended_user_agent below works for the resolution step but the CDN itself accepts any UA)." },
+        cdn_url: { type: 'string', description: "Direct video URL on the platform's CDN. Present only when media_type === 'video'. Fetch with no cookies and no Referer." },
+        images: {
+          type: 'array',
+          description: "Present only when media_type === 'images'. Each entry is one photo from the carousel.",
+          items: {
+            type: 'object',
+            properties: {
+              index: { type: 'integer' },
+              url: { type: 'string' },
+              width: { type: 'integer' },
+              height: { type: 'integer' },
+              filename: { type: 'string' },
+            },
+            required: ['index', 'url'],
+          },
+        },
         cover_image_url: { type: 'string' },
         video_id: { type: 'string' },
         item_id: { type: 'string' },
@@ -67,7 +88,7 @@ const TOOLS = [
         cdn_lifetime_seconds: { type: 'integer', description: "Conservative TTL — actual platform signed-URL expiry is slightly longer." },
         suggested_filename: { type: 'string' },
       },
-      required: ['platform', 'title', 'cdn_url'],
+      required: ['platform', 'media_type', 'title'],
     },
   },
 ];
@@ -82,19 +103,49 @@ async function callDownloadVideo({ share_url }) {
   } catch (err) {
     return toolError(err.message || 'Unknown parse error');
   }
+
+  const recommendedUa = parsed.platform === 'douyin' ? MOBILE_UA : DESKTOP_UA;
+  const ttl = cacheTtlForPlatform(parsed.platform);
+  const baseResult = {
+    platform: parsed.platform,
+    media_type: parsed.media_type || 'video',
+    title: parsed.title,
+    cover_image_url: parsed.cover || '',
+    item_id: parsed.item_id || '',
+    recommended_user_agent: recommendedUa,
+    cdn_lifetime_seconds: ttl,
+  };
+
+  // Image carousel (Douyin 图文/图集): return per-photo URLs, no cdn_url field.
+  if (parsed.media_type === 'images') {
+    const images = (parsed.images || []).map((img, i) => ({
+      index: i,
+      url: img.url,
+      width: img.width || 0,
+      height: img.height || 0,
+      filename: `${parsed.platform}_${parsed.item_id || 'images'}_${i + 1}.jpg`,
+    }));
+    if (!images.length) return toolError('Image carousel parsed but contained no images.');
+    const result = {
+      ...baseResult,
+      video_id: '',
+      images,
+      suggested_filename: `${parsed.platform}_${parsed.item_id || 'images'}.zip`,
+    };
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  }
+
   if (!parsed.resolvedCdnUrl) {
     return toolError('Parse succeeded but no CDN URL was resolved (rare — usually a transient platform glitch; retry once).');
   }
 
   const result = {
-    platform: parsed.platform,
-    title: parsed.title,
+    ...baseResult,
     cdn_url: parsed.resolvedCdnUrl,
-    cover_image_url: parsed.cover || '',
     video_id: parsed.video_id || '',
-    item_id: parsed.item_id || '',
-    recommended_user_agent: parsed.platform === 'douyin' ? MOBILE_UA : DESKTOP_UA,
-    cdn_lifetime_seconds: cacheTtlForPlatform(parsed.platform),
     suggested_filename: `${parsed.platform}_${parsed.item_id || parsed.video_id || 'video'}.mp4`,
   };
 
