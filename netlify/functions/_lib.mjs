@@ -52,7 +52,12 @@ function walkForVideo(obj, depth = 0) {
 
 function walkForItem(obj, depth = 0) {
   if (!obj || typeof obj !== 'object' || depth > 8) return null;
-  if (obj.video && (typeof obj.desc === 'string' || obj.aweme_id || obj.awemeId)) return obj;
+  // An "item" (aweme) always has a desc/aweme_id. It may carry `video`
+  // (regular video), `images` (图文/图集), or both (图文 posts also include a
+  // background music + sometimes a video object — but `images` being a
+  // populated array is the authoritative signal for an image-carousel post).
+  const hasItemFields = typeof obj.desc === 'string' || obj.aweme_id || obj.awemeId;
+  if (hasItemFields && (obj.video || (Array.isArray(obj.images) && obj.images.length))) return obj;
   for (const k of Object.keys(obj)) {
     const v = obj[k];
     if (v && typeof v === 'object') {
@@ -61,6 +66,17 @@ function walkForItem(obj, depth = 0) {
     }
   }
   return null;
+}
+
+// Pick the best CDN URL out of a Douyin image's url_list. Each url_list has
+// several webp variants on different mirror hosts plus one JPEG variant at the
+// end. We prefer JPEG: iOS "Save to Photos" via Shortcuts accepts both but JPEG
+// has the widest 3rd-party-app compatibility, and the file is only ~2x larger.
+function pickImageUrl(urlList) {
+  if (!Array.isArray(urlList) || !urlList.length) return null;
+  const jpeg = urlList.find((u) => typeof u === 'string' && /\.jpe?g(\?|$)/i.test(u));
+  const pick = jpeg || urlList[0];
+  return typeof pick === 'string' ? pick.replace(/^http:/, 'https:') : null;
 }
 
 async function parseDouyin(url) {
@@ -87,6 +103,41 @@ async function parseDouyin(url) {
 
   const routerData = JSON.parse(routerMatch[1]);
   const item = walkForItem(routerData) || {};
+
+  // Branch: image carousel (图文/图集) vs regular video.
+  // Image posts have aweme_type 2 or 68 and a non-empty `images` array. They
+  // also carry a `video` object (sometimes background motion, sometimes empty)
+  // and a `music` object with its own play_addr — so we must NOT fall through
+  // to the video path and accidentally extract the music URL as the "video".
+  const isImagePost =
+    (Array.isArray(item.images) && item.images.length > 0) ||
+    item.aweme_type === 2 || item.aweme_type === 68 ||
+    /\/share\/note\//.test(finalUrl);
+
+  if (isImagePost) {
+    const images = (item.images || [])
+      .map((img) => {
+        const url = pickImageUrl(img?.url_list);
+        if (!url) return null;
+        return { url, width: img.width || 0, height: img.height || 0 };
+      })
+      .filter(Boolean);
+    if (!images.length) throw new Error('图文帖子未找到可用图片地址');
+
+    return {
+      platform: 'douyin',
+      media_type: 'images',
+      title: (item.desc || 'Douyin images').slice(0, 200),
+      cover: images[0].url,
+      item_id: itemId || item.aweme_id || item.awemeId || '',
+      video_id: '',
+      vid: '',
+      // No single CDN URL for image posts — caller reads `images` instead.
+      resolvedCdnUrl: null,
+      images,
+    };
+  }
+
   const videoObj = walkForVideo(routerData);
   if (!videoObj) throw new Error('未找到视频播放地址，可能是图集或已删除');
 
@@ -123,6 +174,7 @@ async function parseDouyin(url) {
 
   return {
     platform: 'douyin',
+    media_type: 'video',
     title: (item.desc || 'Douyin video').slice(0, 200),
     cover: cover.replace(/^http:/, 'https:'),
     item_id: itemId || item.aweme_id || item.awemeId || '',
@@ -212,6 +264,7 @@ async function parseTikTok(url) {
 
   return {
     platform: 'tiktok',
+    media_type: 'video',
     title: (itemStruct.desc || 'TikTok video').slice(0, 200),
     cover: (video.cover || video.originCover || '').replace(/^http:/, 'https:'),
     item_id: itemId,
@@ -272,6 +325,7 @@ async function parseTwitter(url) {
 
   return {
     platform: 'twitter',
+    media_type: 'video',
     title: (data.text || data.user?.name || 'Twitter video').slice(0, 200),
     cover: v.poster || '',
     item_id: tweetId,
@@ -375,6 +429,7 @@ async function parseInstagram(url) {
 
   return {
     platform: 'instagram',
+    media_type: 'video',
     title: usedCarouselIndex !== null ? `[carousel #${usedCarouselIndex + 1}] ${title}` : title,
     cover: cover.replace(/^http:/, 'https:'),
     item_id: media.id || shortcode,

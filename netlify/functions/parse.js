@@ -54,7 +54,9 @@ exports.handler = async (event) => {
 
   return json(200, {
     platform: parsed.platform,
+    media_type: parsed.media_type || 'video',
     direct_cdn_url: parsed.resolvedCdnUrl || null,
+    images: parsed.images || null,
     video_id: parsed.video_id,
     cover: parsed.cover,
     title: parsed.title,

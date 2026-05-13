@@ -19,6 +19,41 @@ export default async (req) => {
   }
   const edgeTtl = cacheTtlForPlatform(parsed.platform);
 
+  const mediaType = parsed.media_type || 'video';
+
+  // ---- Image-carousel branch (Douyin 图文/图集) ----
+  // Returns an `images` array; Shortcut clients should iterate and save each.
+  // `direct` is null because there is no single asset URL. `download_url`
+  // still works and accepts `&index=N` to pick a specific image (default 0).
+  if (mediaType === 'images') {
+    const images = (parsed.images || []).map((img, i) => ({
+      index: i,
+      url: img.url,
+      width: img.width || 0,
+      height: img.height || 0,
+      filename: `${parsed.platform}_${parsed.item_id || 'images'}_${i + 1}.jpg`,
+      // *.douyinpic.com accepts any UA / no Referer / no cookie. Listed
+      // for symmetry with the video branch so Shortcut clients can copy
+      // the same fetch-config codepath.
+      headers: { 'User-Agent': MOBILE_UA },
+      download_url: `${url.origin}/api/download?url=${encodeURIComponent(share)}&index=${i}`,
+    }));
+
+    return json(200, {
+      platform: parsed.platform,
+      media_type: 'images',
+      video_id: '',
+      item_id: parsed.item_id,
+      title: parsed.title,
+      cover: parsed.cover,
+      direct: null,
+      images,
+      download_url: `${url.origin}/api/download?url=${encodeURIComponent(share)}`,
+      note: 'Image carousel — iterate `images[]` and GET each `url`. *.douyinpic.com serves Access-Control-Allow-Origin: * and accepts any UA / no Referer.',
+    }, edgeTtl);
+  }
+
+  // ---- Video branch (original behavior) ----
   const filename = `${parsed.platform}_${parsed.item_id || parsed.video_id || 'video'}.mp4`;
   // Douyin still has a fallback URL via aweme.snssdk.com if the server-side
   // resolve missed (very rare). TikTok / Twitter have no usable fallback —
@@ -43,6 +78,7 @@ export default async (req) => {
 
   return json(200, {
     platform: parsed.platform,
+    media_type: 'video',
     video_id: parsed.video_id,
     item_id: parsed.item_id,
     title: parsed.title,

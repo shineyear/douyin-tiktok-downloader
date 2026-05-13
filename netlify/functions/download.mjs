@@ -24,6 +24,30 @@ export default async (req) => {
     return plain(502, `parse failed: ${err.message}`);
   }
 
+  // Image-carousel posts (Douyin 图文/图集): pick image by ?index=N (default 0)
+  // and 302 to its douyinpic CDN URL. Same zero-bandwidth contract as video.
+  if (parsed.media_type === 'images') {
+    const images = parsed.images || [];
+    if (!images.length) return plain(502, 'image carousel parsed but no images extracted');
+    const rawIndex = parseInt(url.searchParams.get('index') || '0', 10);
+    const index = Number.isFinite(rawIndex) && rawIndex >= 0 && rawIndex < images.length
+      ? rawIndex
+      : 0;
+    let cdnUrl = images[index].url;
+    if (!cdnUrl.includes('?')) cdnUrl += `?_=${Date.now()}`;
+    return new Response(null, {
+      status: 302,
+      headers: {
+        'Location': cdnUrl,
+        'Referrer-Policy': 'no-referrer',
+        'Cache-Control': 'no-store',
+        'X-Item-Id': parsed.item_id || '',
+        'X-Image-Index': String(index),
+        'X-Image-Count': String(images.length),
+      },
+    });
+  }
+
   if (!parsed.resolvedCdnUrl) {
     return plain(502, `could not resolve ${parsed.platform} CDN URL`);
   }

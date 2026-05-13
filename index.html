@@ -192,6 +192,28 @@
       padding-bottom: 1px;
     }
     .credit a:hover { color: #ff0050; border-bottom-color: #ff0050; }
+
+    /* Douyin 图文/图集 carousel — vertical stack of images, one save-btn each. */
+    .images-grid { margin-top: 0; }
+    .images-grid figure {
+      margin: 14px 0 0;
+      padding: 0;
+    }
+    .images-grid img {
+      width: 100%;
+      display: block;
+      border-radius: 10px;
+      background: #141414;
+      /* No fixed aspect — Douyin posts mix 1:1, 4:5, 16:9. */
+    }
+    .img-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 6px;
+      font-size: 12px;
+      color: #666;
+    }
   </style>
 </head>
 <body>
@@ -242,6 +264,13 @@
       notReady: '视频还未就绪，请稍候',
       parseFailed: '解析失败',
       errorPrefix: '错误：',
+      imagesTagLabel: '图文',
+      tipImagesIOS: '📱 点每张图下方的 保存图片，或长按图片保存',
+      tipImagesOther: '📱 点 保存图片 下载到本地',
+      saveImage: '💾 保存图片',
+      savingImage: '下载中...',
+      imageSaved: '✓ 已保存',
+      imageFailed: '❌ 失败，点击重试',
     },
     en: {
       html_lang: 'en',
@@ -268,6 +297,13 @@
       notReady: 'Video not ready yet',
       parseFailed: 'Parse failed',
       errorPrefix: 'Error: ',
+      imagesTagLabel: 'Photos',
+      tipImagesIOS: '📱 Tap Save image under each photo, or long-press the image',
+      tipImagesOther: '📱 Tap Save image to download',
+      saveImage: '💾 Save image',
+      savingImage: 'Downloading...',
+      imageSaved: '✓ Saved',
+      imageFailed: '❌ Failed, tap to retry',
     },
     ja: {
       html_lang: 'ja',
@@ -294,6 +330,13 @@
       notReady: '動画がまだ準備できていません',
       parseFailed: '解析に失敗しました',
       errorPrefix: 'エラー：',
+      imagesTagLabel: '画像',
+      tipImagesIOS: '📱 各画像の下の 画像を保存 をタップ、または画像を長押し',
+      tipImagesOther: '📱 画像を保存 をタップしてダウンロード',
+      saveImage: '💾 画像を保存',
+      savingImage: 'ダウンロード中...',
+      imageSaved: '✓ 保存しました',
+      imageFailed: '❌ 失敗、タップで再試行',
     },
     es: {
       html_lang: 'es',
@@ -320,6 +363,13 @@
       notReady: 'El vídeo aún no está listo',
       parseFailed: 'Análisis fallido',
       errorPrefix: 'Error: ',
+      imagesTagLabel: 'Fotos',
+      tipImagesIOS: '📱 Toca Guardar imagen bajo cada foto o mantén presionado',
+      tipImagesOther: '📱 Toca Guardar imagen para descargar',
+      saveImage: '💾 Guardar imagen',
+      savingImage: 'Descargando...',
+      imageSaved: '✓ Guardado',
+      imageFailed: '❌ Falló, toca para reintentar',
     }
   };
 
@@ -442,13 +492,40 @@
       if (!resp.ok) throw new Error(data.error || t('parseFailed'));
 
       const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-      const tip = isIOS ? t('tipIOS') : t('tipOther');
       const platform = data.platform || 'douyin';
       const tagLabel = platform === 'tiktok' ? 'TikTok'
                      : platform === 'twitter' ? 'X'
                      : platform === 'instagram' ? 'Instagram'
                      : '抖音';
       const tag = `<span class="platform-tag tag-${platform}">${tagLabel}</span>`;
+
+      // ---- Image carousel branch (Douyin 图文/图集) ----
+      // No video to prefetch — render each image as <img> and let the user
+      // tap a per-image Save button (or long-press) to save one at a time.
+      // Lazy by design: bytes only leave the CDN when the user taps Save.
+      if (data.media_type === 'images' && Array.isArray(data.images) && data.images.length) {
+        const tip = isIOS ? t('tipImagesIOS') : t('tipImagesOther');
+        const count = data.images.length;
+        const imagesTag = `<span class="platform-tag tag-${platform}">${tagLabel} · ${t('imagesTagLabel')} ${count}</span>`;
+        const figures = data.images.map((img, i) => `
+          <figure>
+            <img src="${img.url}" referrerpolicy="no-referrer" alt="">
+            <div class="img-meta">
+              <span>${i + 1} / ${count}${img.width && img.height ? ` · ${img.width}×${img.height}` : ''}</span>
+            </div>
+            <button class="save-btn save-img" data-index="${i}" data-url="${img.url}" data-name="${platform}_${data.item_id || 'images'}_${i + 1}.jpg">${t('saveImage')}</button>
+          </figure>
+        `).join('');
+        result.innerHTML = `
+          <div class="title">${imagesTag}${escapeHtml(data.title || '')}</div>
+          <div class="tip">${tip}</div>
+          <div class="images-grid">${figures}</div>
+        `;
+        result.querySelectorAll('.save-img').forEach((b) => { b.onclick = onSaveImageClick; });
+        return;
+      }
+
+      const tip = isIOS ? t('tipIOS') : t('tipOther');
       const filename = `${platform}_${data.item_id || data.video_id || Date.now()}.mp4`;
 
       // Fetch the blob straight from the CDN the server pre-resolved for us.
@@ -550,6 +627,52 @@
         btn.disabled = false;
         btn.dataset.retry = '1';
       }
+    }
+  }
+
+  async function onSaveImageClick(ev) {
+    const btn = ev.currentTarget;
+    const src = btn.dataset.url;
+    const name = btn.dataset.name;
+    if (!src) return;
+
+    const originalLabel = t('saveImage');
+    btn.disabled = true;
+    btn.textContent = t('savingImage');
+
+    try {
+      // referrerPolicy:'no-referrer' matches video flow — douyinpic.com sets
+      // ACAO:* but stay defensive against any future Referer check. Bytes go
+      // browser ↔ CDN; Netlify never sees the image.
+      const resp = await fetch(src, { referrerPolicy: 'no-referrer' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const type = blob.type || 'image/jpeg';
+      const file = new File([blob], name, { type });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+          btn.textContent = t('imageSaved');
+        } catch (err) {
+          if (err.name === 'AbortError') { btn.textContent = originalLabel; btn.disabled = false; }
+          else if (err.name === 'NotAllowedError') { btn.textContent = t('notAllowed'); btn.disabled = false; }
+          else { btn.textContent = t('shareFailed'); btn.disabled = false; alert(err.message); }
+        }
+        return;
+      }
+
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      btn.textContent = t('imageSaved');
+    } catch (err) {
+      btn.textContent = t('imageFailed');
+      btn.disabled = false;
     }
   }
 
