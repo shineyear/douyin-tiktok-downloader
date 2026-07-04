@@ -347,96 +347,86 @@ async function parseInstagram(url) {
   if (!codeMatch) throw new Error('未识别到 Instagram shortcode（仅支持 /p/、/reel/、/reels/ 链接）');
   const shortcode = codeMatch[1];
 
-  // Step 1: warm csrftoken cookie. Instagram's graphql endpoint requires
-  // a csrftoken cookie + matching X-CSRFToken header even for unauth calls.
-  // A cold GET to instagram.com sets the cookie for free.
-  const warm = await fetch('https://www.instagram.com/', {
-    headers: { 'User-Agent': DESKTOP_UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-  });
-  const setCookie = warm.headers.get('set-cookie') || '';
-  const csrf = (setCookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
-  if (!csrf) throw new Error('Instagram csrftoken cookie 拿不到（可能 IP 被风控）');
-
-  // Step 2: graphql call. doc_id is a stable identifier maintained by yt-dlp;
-  // Instagram rotates these every few months — if this 4xx-es with a doc_id
-  // error, find the current value at:
-  //   github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py
-  // (search for `doc_id`)
-  const variables = JSON.stringify({
-    shortcode,
-    child_comment_count: 3,
-    fetch_comment_count: 40,
-    parent_comment_count: 24,
-    has_threaded_comments: true,
-  });
-  const body = new URLSearchParams({
-    doc_id: '8845758582119845',
-    variables,
-  });
-  const resp = await fetch('https://www.instagram.com/graphql/query/', {
-    method: 'POST',
+  // Scrape the logged-out reel page HTML directly and pull the video URL
+  // out of the inlined `video_versions` JSON. The previous doc_id-based
+  // graphql path is retired: the old /graphql/query/ endpoint now returns
+  // {"errors":[{"message":"execution error","severity":"CRITICAL"}],"data":null}
+  // for every shortcode, and yt-dlp's newer /api/graphql path only works with
+  // TLS-fingerprint impersonation (curl-cffi) — plain Node fetch gets served
+  // the login-gate HTML page. IG still server-renders `video_versions` into
+  // the logged-out reel page, so scraping that stays viable.
+  const resp = await fetch(`https://www.instagram.com/reel/${shortcode}/`, {
     headers: {
       'User-Agent': DESKTOP_UA,
-      'X-IG-App-ID': '936619743392459',
-      'X-ASBD-ID': '198387',
-      'X-IG-WWW-Claim': '0',
-      'X-CSRFToken': csrf,
-      'X-Requested-With': 'XMLHttpRequest',
-      'Origin': 'https://www.instagram.com',
-      'Referer': `https://www.instagram.com/p/${shortcode}/`,
-      'Cookie': `csrftoken=${csrf}`,
-      'Accept': '*/*',
-      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
     },
-    body: body.toString(),
   });
-  // Instagram rate-limits the graphql endpoint at the IP level. On shared
-  // Netlify IPs this triggers after just a few requests — 429 is the honest
-  // answer but IG also returns 401 ("require_login") as a soft-rate-limit.
-  // Surface both as the same user-facing "try again later" error.
-  if (resp.status === 429 || resp.status === 401) {
+  if (resp.status === 429) {
     throw new Error('Instagram 风控中，请 10-30 分钟后再试 (IG rate-limited our IP pool; this is a known IG restriction for any shared-IP service, not a bug)');
   }
-  if (!resp.ok) throw new Error(`Instagram graphql HTTP ${resp.status}`);
-  const data = await resp.json();
-  const media = data?.data?.xdt_shortcode_media;
-  if (!media) throw new Error('Instagram 未返回视频元数据（可能私密 / 删除 / 区域锁）');
+  if (!resp.ok) throw new Error(`Instagram page HTTP ${resp.status}`);
+  const html = await resp.text();
 
-  // Single-video post or reel: video_url is at top level.
-  // Carousel post: edge_sidecar_to_children.edges[i].node.video_url. For now
-  // pick the first video in the carousel; warn user to specify if they want
-  // a different one (rare case).
-  let videoUrl = media.video_url;
-  let cover = media.thumbnail_src || media.display_url || '';
-  let usedCarouselIndex = null;
+  const ogTitle = (html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/) || [])[1] || '';
+  const ogImage = (html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/) || [])[1] || '';
+  const ogDesc  = (html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/) || [])[1] || '';
+
+  // `video_versions` is an inlined JSON array; grab the first `"url":"..."` inside it.
+  let videoUrl = '';
+  const vvStart = html.indexOf('"video_versions":[');
+  if (vvStart !== -1) {
+    const slice = html.slice(vvStart, vvStart + 8000);
+    const m = slice.match(/"url":"([^"]+)"/);
+    if (m) videoUrl = m[1].replace(/\\\//g, '/');
+  }
+
   if (!videoUrl) {
-    const sidecar = media.edge_sidecar_to_children?.edges || [];
-    const videoChild = sidecar.find((e) => e.node?.is_video && e.node?.video_url);
-    if (videoChild) {
-      videoUrl = videoChild.node.video_url;
-      cover = videoChild.node.thumbnail_src || videoChild.node.display_url || cover;
-      usedCarouselIndex = sidecar.indexOf(videoChild);
+    // No inlined video. Distinguish IP rate-limit / login-gate / not-a-video.
+    if (!ogTitle && !ogImage) {
+      throw new Error('Instagram 风控中，请 10-30 分钟后再试 (IG rate-limited our IP pool; this is a known IG restriction for any shared-IP service, not a bug)');
     }
-  }
-  if (!videoUrl) {
-    throw new Error('该帖子不含视频（仅图片）');
+    if (ogImage && !html.includes('"video_versions"')) {
+      throw new Error('该帖子不含视频（仅图片）');
+    }
+    throw new Error('Instagram 未返回视频元数据（可能私密 / 删除 / 区域锁）');
   }
 
-  const captionEdges = media.edge_media_to_caption?.edges || [];
-  const caption = captionEdges[0]?.node?.text || '';
-  const owner = media.owner?.username || '';
+  const decodeEntities = (s) =>
+    s
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(parseInt(n, 10)));
+
+  const decodedImage = decodeEntities(ogImage);
+  const decodedTitle = decodeEntities(ogTitle);
+  const decodedDesc  = decodeEntities(ogDesc);
+
+  // og:description shape: "N,NNN likes, M comments - username on DATE: ..."
+  const ownerMatch = decodedDesc.match(/-\s+([A-Za-z0-9._]+)\s+on\s+/);
+  const owner = ownerMatch ? ownerMatch[1] : '';
+
+  // og:title shape: "Display Name on Instagram: "<caption>""
+  const captionMatch = decodedTitle.match(/on Instagram:\s*[""]?(.+?)[""]?$/s);
+  const caption = captionMatch ? captionMatch[1].trim() : decodedTitle;
   const title = (caption || (owner ? `@${owner} on Instagram` : 'Instagram video')).slice(0, 200);
 
   return {
     platform: 'instagram',
     media_type: 'video',
-    title: usedCarouselIndex !== null ? `[carousel #${usedCarouselIndex + 1}] ${title}` : title,
-    cover: cover.replace(/^http:/, 'https:'),
-    item_id: media.id || shortcode,
-    video_id: shortcode,
-    vid: shortcode,
+    title,
     // *.cdninstagram.com URLs serve `Access-Control-Allow-Origin: *` and accept
     // requests with no Referer / no cookie / any UA. Browser fetches direct.
+    cover: decodedImage.replace(/^http:/, 'https:'),
+    item_id: shortcode,
+    video_id: shortcode,
+    vid: shortcode,
     resolvedCdnUrl: videoUrl,
   };
 }
