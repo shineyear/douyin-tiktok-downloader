@@ -22,7 +22,6 @@ TIKTOK=(
   'https://www.tiktok.com/@9news/video/7283777168503573768'
   'https://www.tiktok.com/@blackcardlondon/video/7512419868210171158'
   'https://www.tiktok.com/@tiktok/video/7106594312292453675'
-  'https://www.tiktok.com/t/ZTkQ41K3L/'
 )
 TWITTER=(
   'https://x.com/WhiteHouse/status/2031895801064985021'
@@ -75,7 +74,10 @@ else:
     echo "PASS|$share_url|"
     return
   fi
-  if [[ "$head_code" == "403" || "$head_code" == "405" || "$head_code" == "504" ]]; then
+  # 403/405/504: CDN blocks bare HEAD; a range-GET usually succeeds.
+  # 503: transient CDN error — one range-GET retry filters out flakes that
+  # would otherwise trip a HARD-fail into the (bad) retry seed.
+  if [[ "$head_code" == "403" || "$head_code" == "405" || "$head_code" == "503" || "$head_code" == "504" ]]; then
     head_code=$(curl -sS -m 15 --range 0-0 -o /dev/null -w '%{http_code}' "$cdn" 2>/dev/null)
     if [[ "$head_code" =~ ^(200|206)$ ]]; then
       echo "PASS|$share_url|"

@@ -214,9 +214,21 @@ async function parseTikTok(url) {
   try { parsed = JSON.parse(dataMatch[1]); }
   catch (e) { throw new Error(`TikTok JSON parse failed: ${e.message}`); }
 
-  const itemStruct =
-    parsed?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
-  if (!itemStruct) throw new Error('TikTok video data not in page (private/deleted/region-locked?)');
+  const videoDetail = parsed?.__DEFAULT_SCOPE__?.['webapp.video-detail'];
+  const itemStruct = videoDetail?.itemInfo?.itemStruct;
+  if (!itemStruct) {
+    // TikTok reports the specific access reason via statusCode/statusMsg on
+    // the video-detail scope. Surface the common ones so callers (and the
+    // health check) can tell "genuinely inaccessible" from "parser broke".
+    // 10204 = status_friend_see, 10216 = age-gated, 10222 = geo-blocked.
+    // Anything else falls back to the generic message.
+    const sc = videoDetail?.statusCode;
+    if (sc === 10204) throw new Error('TikTok 视频仅好友可见 (friends-only)');
+    if (sc === 10216) throw new Error('TikTok 视频年龄限制 (age-gated)');
+    if (sc === 10222) throw new Error('TikTok 视频区域限制 (region-locked)');
+    if (sc) throw new Error(`TikTok video not accessible (statusCode=${sc}, ${videoDetail?.statusMsg || 'no msg'})`);
+    throw new Error('TikTok video data not in page (private/deleted/region-locked?)');
+  }
 
   const video = itemStruct.video || {};
   const itemId =
