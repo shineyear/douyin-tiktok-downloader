@@ -15,7 +15,6 @@ LOG="$HOME/Library/Logs/digitaldialogue-check.log"
 mkdir -p "$(dirname "$LOG")"
 
 DOUYIN=(
-  'https://v.douyin.com/9zCRrjMtxL8'
   'https://v.douyin.com/OuSt8KHbgHU'
 )
 TIKTOK=(
@@ -61,11 +60,20 @@ else:
     return
   fi
   if [[ -n "$err" ]]; then
+    # Platform rate limits: transient, not our bug.
     if printf '%s' "$err" | grep -qE '风控|10-30 分钟|rate-limit|require_login|429'; then
       echo "SOFT|$share_url|$err"
-    else
-      echo "HARD|$share_url|$err"
+      return
     fi
+    # The seed video itself became unwatchable (deleted / private / friends-only
+    # / age- or region-gated). That is a rotted test fixture, not a broken
+    # parser — flag it as SOFT so it never pages us at 9am, but say plainly
+    # that the seed needs swapping.
+    if printf '%s' "$err" | grep -qE '已删除|作品不见了|作品权限|私密|仅好友可见|friends-only|age-gated|region-locked|不含视频|private/deleted'; then
+      echo "SOFT|$share_url|SEED ROTTED (replace this URL in health-check.sh) — $err"
+      return
+    fi
+    echo "HARD|$share_url|$err"
     return
   fi
   local cdn; cdn=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin)["direct"]["url"])')

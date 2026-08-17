@@ -34,40 +34,6 @@ export function detectPlatform(rawUrl) {
 
 // -------- Douyin parser --------
 
-function walkForVideo(obj, depth = 0) {
-  if (!obj || typeof obj !== 'object' || depth > 8) return null;
-  if (obj.play_addr && Array.isArray(obj.play_addr.url_list) && obj.play_addr.url_list.length) return obj;
-  if (obj.playAddr && Array.isArray(obj.playAddr.url_list) && obj.playAddr.url_list.length) {
-    return { ...obj, play_addr: obj.playAddr };
-  }
-  for (const k of Object.keys(obj)) {
-    const v = obj[k];
-    if (v && typeof v === 'object') {
-      const hit = walkForVideo(v, depth + 1);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-function walkForItem(obj, depth = 0) {
-  if (!obj || typeof obj !== 'object' || depth > 8) return null;
-  // An "item" (aweme) always has a desc/aweme_id. It may carry `video`
-  // (regular video), `images` (图文/图集), or both (图文 posts also include a
-  // background music + sometimes a video object — but `images` being a
-  // populated array is the authoritative signal for an image-carousel post).
-  const hasItemFields = typeof obj.desc === 'string' || obj.aweme_id || obj.awemeId;
-  if (hasItemFields && (obj.video || (Array.isArray(obj.images) && obj.images.length))) return obj;
-  for (const k of Object.keys(obj)) {
-    const v = obj[k];
-    if (v && typeof v === 'object') {
-      const hit = walkForItem(v, depth + 1);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
 // Pick the best CDN URL out of a Douyin image's url_list. Each url_list has
 // several webp variants on different mirror hosts plus one JPEG variant at the
 // end. We prefer JPEG: iOS "Save to Photos" via Shortcuts accepts both but JPEG
@@ -79,57 +45,139 @@ function pickImageUrl(urlList) {
   return typeof pick === 'string' ? pick.replace(/^http:/, 'https:') : null;
 }
 
-async function parseDouyin(url) {
-  const resp = await fetch(url, {
-    redirect: 'follow',
+// Resolve any Douyin share link to its numeric aweme_id. Short links
+// (v.douyin.com/XXXX) 302 to a long URL carrying the id; long URLs already
+// have it. Uses a manual redirect so we never download the page body.
+async function resolveDouyinItemId(url) {
+  const fromUrl = (u) =>
+    (u.match(/\/(?:video|note|share\/video|share\/note)\/(\d+)/) ||
+     u.match(/[?&]modal_id=(\d+)/) ||
+     u.match(/\/(\d{15,})/) || [])[1] || '';
+
+  const direct = fromUrl(url);
+  if (direct) return direct;
+
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    const resp = await fetch(current, {
+      redirect: 'manual',
+      headers: { 'User-Agent': MOBILE_UA, 'Accept-Language': 'zh-CN,zh;q=0.9' },
+    });
+    const loc = resp.headers.get('location');
+    if (!loc) break;
+    current = new URL(loc, current).toString();
+    const id = fromUrl(current);
+    if (id) return id;
+  }
+  throw new Error('无法从链接解析出抖音视频 ID');
+}
+
+// Douyin gates its web API behind a `ttwid` cookie. ByteDance's registration
+// endpoint mints one for any caller — no browser, no login, no account — and
+// it is the ONLY cookie the detail endpoint checks (verified by dropping each
+// harvested cookie in turn; every other one is optional). Minted values carry
+// a one-year expiry, so we hold one per warm instance and only re-mint when
+// Douyin rejects it.
+let cachedTtwid = null;
+
+async function mintTtwid() {
+  const resp = await fetch('https://ttwid.bytedance.com/ttwid/union/register/', {
+    method: 'POST',
+    headers: { 'User-Agent': DESKTOP_UA, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      region: 'cn',
+      aid: 6383,
+      needFid: false,
+      service: 'www.douyin.com',
+      migrate_info: { ticket: '', source: 'node' },
+      cbUrlProtocol: 'https',
+      union: true,
+    }),
+  });
+  const jar = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : [];
+  for (const c of jar) {
+    const m = /^ttwid=([^;]+)/.exec(c.trim());
+    if (m) return m[1];
+  }
+  return null;
+}
+
+async function fetchDouyinDetail(itemId, ttwid) {
+  const qs = new URLSearchParams({
+    device_platform: 'webapp',
+    aid: '6383',
+    aweme_id: itemId,
+    version_code: '190500',
+    version_name: '19.5.0',
+  }).toString();
+
+  const resp = await fetch(`https://www.douyin.com/aweme/v1/web/aweme/detail/?${qs}`, {
     headers: {
-      'User-Agent': MOBILE_UA,
-      'Accept': 'text/html,application/xhtml+xml',
+      'User-Agent': DESKTOP_UA,
+      'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh;q=0.9',
+      'Referer': `https://www.douyin.com/video/${itemId}`,
+      'Cookie': `ttwid=${ttwid}`,
     },
   });
-  const finalUrl = resp.url;
-  const html = await resp.text();
+  return resp.text();
+}
 
-  const idMatch =
-    finalUrl.match(/\/(?:video|note|share\/video|share\/note)\/(\d+)/) ||
-    finalUrl.match(/[?&]modal_id=(\d+)/) ||
-    finalUrl.match(/\/(\d{15,})/);
-  const itemId = idMatch ? idMatch[1] : '';
+async function parseDouyin(url) {
+  // Douyin stopped server-rendering video data into the share page in Aug 2026
+  // — _ROUTER_DATA now arrives empty for every video — so the web API is the
+  // only remaining source. It needs a ttwid cookie but no request signature:
+  // the a_bogus parameter every scraping guide adds is not checked here.
+  const itemId = await resolveDouyinItemId(url);
 
-  let routerMatch = html.match(/window\._ROUTER_DATA\s*=\s*(\{[\s\S]+?\})\s*<\/script>/);
-  if (!routerMatch) routerMatch = html.match(/_ROUTER_DATA\s*=\s*(\{[\s\S]+?\});\s*window/);
-  if (!routerMatch) throw new Error('抖音页面结构异常，链接可能失效或被风控');
+  if (!cachedTtwid) cachedTtwid = await mintTtwid();
+  let text = cachedTtwid ? await fetchDouyinDetail(itemId, cachedTtwid) : '';
 
-  const routerData = JSON.parse(routerMatch[1]);
-  const item = walkForItem(routerData) || {};
+  // Douyin signals a rejected ttwid with HTTP 200 and an empty body rather
+  // than an error status. Mint a fresh one and retry once before giving up.
+  if (!text.trim()) {
+    cachedTtwid = await mintTtwid();
+    if (!cachedTtwid) throw new Error('抖音接口鉴权失败（ttwid 获取不到），请稍后再试');
+    text = await fetchDouyinDetail(itemId, cachedTtwid);
+  }
+  if (!text.trim()) {
+    throw new Error('抖音接口未返回数据，可能被风控，请稍后再试');
+  }
 
-  // Branch: image carousel (图文/图集) vs regular video.
-  // Image posts have aweme_type 2 or 68 and a non-empty `images` array. They
-  // also carry a `video` object (sometimes background motion, sometimes empty)
-  // and a `music` object with its own play_addr — so we must NOT fall through
-  // to the video path and accidentally extract the music URL as the "video".
-  const isImagePost =
-    (Array.isArray(item.images) && item.images.length > 0) ||
-    item.aweme_type === 2 || item.aweme_type === 68 ||
-    /\/share\/note\//.test(finalUrl);
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('抖音接口返回异常内容，可能被风控，请稍后再试');
+  }
 
-  if (isImagePost) {
-    const images = (item.images || [])
-      .map((img) => {
-        const url = pickImageUrl(img?.url_list);
-        if (!url) return null;
-        return { url, width: img.width || 0, height: img.height || 0 };
-      })
-      .filter(Boolean);
-    if (!images.length) throw new Error('图文帖子未找到可用图片地址');
+  const detail = payload?.aweme_detail;
+  if (!detail) {
+    // filter_detail carries Douyin's own human-readable reason (deleted,
+    // private, author-only, region-locked). Prefer it over a generic guess.
+    const reason = payload?.filter_detail?.detail_msg || payload?.filter_detail?.notice;
+    throw new Error(reason ? `抖音：${reason}` : '抖音未返回视频信息（可能私密 / 删除 / 区域锁）');
+  }
 
+  const title = (detail.desc || '').slice(0, 200);
+
+  // Image carousel (图文/图集) posts carry a populated `images` array. They also
+  // carry a `video` object holding background music, so `images` must be
+  // checked first or we would hand back the music track as the "video".
+  const images = (detail.images || [])
+    .map((img) => {
+      const imgUrl = pickImageUrl(img?.url_list);
+      return imgUrl ? { url: imgUrl, width: img.width || 0, height: img.height || 0 } : null;
+    })
+    .filter(Boolean);
+
+  if (images.length) {
     return {
       platform: 'douyin',
       media_type: 'images',
-      title: (item.desc || 'Douyin images').slice(0, 200),
+      title: title || 'Douyin images',
       cover: images[0].url,
-      item_id: itemId || item.aweme_id || item.awemeId || '',
+      item_id: itemId,
       video_id: '',
       vid: '',
       // No single CDN URL for image posts — caller reads `images` instead.
@@ -138,49 +186,24 @@ async function parseDouyin(url) {
     };
   }
 
-  const videoObj = walkForVideo(routerData);
-  if (!videoObj) throw new Error('未找到视频播放地址，可能是图集或已删除');
-
-  const rawPlayUrl = (videoObj.play_addr.url_list[0] || '')
-    .replace('playwm', 'play')
-    .replace(/^http:/, 'https:');
-  if (!rawPlayUrl) throw new Error('视频地址为空');
-
-  const vidMatch =
-    rawPlayUrl.match(/[?&]video_id=([a-zA-Z0-9_]+)/) ||
-    (videoObj.play_addr.uri && videoObj.play_addr.uri.match(/^[a-zA-Z0-9_]+$/)
-      ? [null, videoObj.play_addr.uri] : null);
-  const vid = vidMatch ? vidMatch[1] : '';
-  if (!vid) throw new Error('无法提取 video_id');
-
-  const cover =
-    (videoObj.cover?.url_list?.[0]) ||
-    (videoObj.origin_cover?.url_list?.[0]) || '';
-
-  // aweme.snssdk.com/play has NO CORS headers on its 302, so a browser can't
-  // follow it from JS. The redirect target advertises ACAO:* and accepts
-  // requests with no Referer. We do the follow once server-side.
-  let resolvedCdnUrl = null;
-  try {
-    const head = await fetch(
-      `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(vid)}&ratio=720p&line=0`,
-      { method: 'HEAD', redirect: 'manual', headers: { 'User-Agent': MOBILE_UA } },
-    );
-    if (head.status >= 300 && head.status < 400) {
-      const loc = head.headers.get('location');
-      if (loc) resolvedCdnUrl = loc.replace(/^http:/, 'https:');
-    }
-  } catch (_) { /* parse still succeeds; client just won't have direct URL */ }
+  const video = detail.video || {};
+  // Every url_list entry advertises Access-Control-Allow-Origin: * and serves
+  // byte ranges without a Referer or cookie, so the browser fetches whichever
+  // we hand back directly — no server-side 302 dance any more.
+  const playUrl = (video.play_addr?.url_list || [])
+    .find((u) => typeof u === 'string' && u.startsWith('https://'));
+  if (!playUrl) throw new Error('未找到视频播放地址，可能是图集或已删除');
 
   return {
     platform: 'douyin',
     media_type: 'video',
-    title: (item.desc || 'Douyin video').slice(0, 200),
-    cover: cover.replace(/^http:/, 'https:'),
-    item_id: itemId || item.aweme_id || item.awemeId || '',
-    video_id: vid,
-    vid,
-    resolvedCdnUrl,
+    title: title || 'Douyin video',
+    cover: (video.cover?.url_list?.[0] || video.origin_cover?.url_list?.[0] || '')
+      .replace(/^http:/, 'https:'),
+    item_id: itemId,
+    video_id: video.play_addr?.uri || '',
+    vid: video.play_addr?.uri || '',
+    resolvedCdnUrl: playUrl,
   };
 }
 
