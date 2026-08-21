@@ -1,10 +1,17 @@
 // Shared core for parse.js, download.mjs, info.mjs.
-// Both Douyin and TikTok use the same trick: their share-link host has a
-// 302 endpoint (Douyin: aweme.snssdk.com/play, TikTok: www.tiktok.com/aweme/v1/play)
-// that — when called WITHOUT cookies — redirects to a cookieless CDN URL with
-// Access-Control-Allow-Origin:* and no anti-hotlink Referer check. We resolve
-// that 302 server-side and hand the final URL to the client, which fetches the
-// MP4 bytes directly from the CDN. Netlify egress per video: ~1 KB JSON.
+//
+// The invariant every platform here must satisfy: we resolve, server-side, a
+// CDN URL that the BROWSER can then fetch directly — meaning it answers cold
+// range requests with Access-Control-Allow-Origin:* and no anti-hotlink Referer
+// check. Video bytes go Browser <-> platform CDN and never transit Netlify;
+// egress per video is ~1 KB of JSON. A URL that only curl can fetch is not good
+// enough, because a browser cannot set Referer (it is a forbidden header).
+//
+// How each platform gets there differs, and drifts as platforms change:
+//   Douyin  -> web API (/aweme/v1/web/aweme/detail/) + self-minted ttwid
+//   TikTok  -> page scrape, then its aweme/v1/play 302 followed WITHOUT cookies
+//   Twitter -> cdn.syndication.twimg.com, no auth and no redirect
+//   Instagram -> logged-out reel page HTML, scraped for inlined video_versions
 
 export const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 ' +
@@ -123,6 +130,48 @@ async function fetchDouyinDetail(itemId, ttwid) {
   return resp.text();
 }
 
+// Douyin serves the same video from several CDN families and the mix varies
+// between requests for the same video. Most of them (*.zjcdn.com,
+// www.douyin.com) answer cold range requests with Access-Control-Allow-Origin:
+// *, but *.douyinvod.com enforces an anti-hotlink check and 403s unless the
+// request carries `Referer: douyin.com`. A browser cannot forge Referer — it is
+// a forbidden header — so a douyinvod URL is useless to us even though curl can
+// fetch it. Handing one out produced intermittent 403s for users and in the
+// health check. Order the permissive families first, then spend one 1-byte
+// range request confirming the browser can really fetch what we return.
+const DOUYIN_REFERER_GATED = /(^|\.)douyinvod\.com$/i;
+
+function hostOf(u) {
+  try { return new URL(u).hostname; } catch { return ''; }
+}
+
+async function pickDouyinPlayUrl(urlList) {
+  const candidates = urlList.filter((u) => typeof u === 'string' && u.startsWith('https://'));
+  if (!candidates.length) return null;
+  const ordered = [
+    ...candidates.filter((u) => !DOUYIN_REFERER_GATED.test(hostOf(u))),
+    ...candidates.filter((u) => DOUYIN_REFERER_GATED.test(hostOf(u))),
+  ];
+  for (const candidate of ordered) {
+    try {
+      const probe = await fetch(candidate, {
+        headers: {
+          'Range': 'bytes=0-0',
+          'User-Agent': DESKTOP_UA,
+          'Origin': 'https://digitaldialogue.com.au',
+        },
+      });
+      if ((probe.status === 200 || probe.status === 206) &&
+          probe.headers.get('access-control-allow-origin') === '*') {
+        return candidate;
+      }
+    } catch { /* mirror unreachable — try the next one */ }
+  }
+  // Every probe failed: transient CDN trouble, or a family we have not seen.
+  // Returning the best-ordered candidate beats failing the whole parse.
+  return ordered[0];
+}
+
 async function parseDouyin(url) {
   // Douyin stopped server-rendering video data into the share page in Aug 2026
   // — _ROUTER_DATA now arrives empty for every video — so the web API is the
@@ -187,11 +236,7 @@ async function parseDouyin(url) {
   }
 
   const video = detail.video || {};
-  // Every url_list entry advertises Access-Control-Allow-Origin: * and serves
-  // byte ranges without a Referer or cookie, so the browser fetches whichever
-  // we hand back directly — no server-side 302 dance any more.
-  const playUrl = (video.play_addr?.url_list || [])
-    .find((u) => typeof u === 'string' && u.startsWith('https://'));
+  const playUrl = await pickDouyinPlayUrl(video.play_addr?.url_list || []);
   if (!playUrl) throw new Error('未找到视频播放地址，可能是图集或已删除');
 
   return {
