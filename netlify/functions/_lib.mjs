@@ -97,12 +97,14 @@ async function resolveDouyinItemId(url) {
 // A real browser is deterministic (8/8), so this is a mitigation, not a cure:
 // if Douyin tightens validation everywhere, this stops working and the SDK
 // handshake becomes the only path.
-// Netlify's egress IP is rejected far harder than a residential one: measured
-// ~50% success from a home connection versus ~0% live from the deployed
-// function, with the same cookies and code. Retrying therefore does not rescue
-// production, so keep the count low — enough to ride out a transient rejection
-// if leniency returns, without hammering an IP that is already being refused.
-const DOUYIN_DETAIL_ATTEMPTS = 3;
+// Retry count is a balance against Douyin's burst rate limiting. Roughly half
+// of individual requests are refused, so a few attempts are needed — but
+// retries are also what trips the limiter: firing ~60 calls in quick
+// succession from one IP got that IP refused for several minutes, which is
+// easy to misread as the IP being permanently blocked. Keep the count modest
+// and space the attempts out.
+const DOUYIN_DETAIL_ATTEMPTS = 4;
+const DOUYIN_RETRY_SPACING_MS = 250;
 
 let cachedDouyinCookie = null;
 
@@ -210,6 +212,9 @@ async function parseDouyin(url) {
     // 403 is an Argus rejection; 200-with-empty-body is a stale ttwid. Both are
     // retryable, and both look identical to the caller, so just try again.
     if (status === 200 && body.trim()) { text = body; break; }
+    if (attempt < DOUYIN_DETAIL_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, DOUYIN_RETRY_SPACING_MS));
+    }
   }
   if (!text) {
     // Name the failing stage. Which one it is decides the remedy, and the
