@@ -8,7 +8,7 @@
 // enough, because a browser cannot set Referer (it is a forbidden header).
 //
 // How each platform gets there differs, and drifts as platforms change:
-//   Douyin  -> web API (/aweme/v1/web/aweme/detail/) + self-minted ttwid
+//   Douyin  -> web API (/aweme/v1/web/aweme/detail/) + self-minted ttwid/UIFID
 //   TikTok  -> page scrape, then its aweme/v1/play 302 followed WITHOUT cookies
 //   Twitter -> cdn.syndication.twimg.com, no auth and no redirect
 //   Instagram -> logged-out reel page HTML, scraped for inlined video_versions
@@ -79,37 +79,45 @@ async function resolveDouyinItemId(url) {
   throw new Error('无法从链接解析出抖音视频 ID');
 }
 
-// Douyin gates its web API behind a `ttwid` cookie. ByteDance's registration
-// endpoint mints one for any caller — no browser, no login, no account — and
-// it is the ONLY cookie the detail endpoint checks (verified by dropping each
-// harvested cookie in turn; every other one is optional). Minted values carry
-// a one-year expiry, so we hold one per warm instance and only re-mint when
-// Douyin rejects it.
-let cachedTtwid = null;
+// Douyin's web API is gated by ByteDance's "Argus" plugin, which as of
+// Sep 2026 rejects requests with 403 `Uifid Not Found` unless a UIFID cookie
+// is present alongside ttwid.
+//
+// A HEAD (not GET) to any video page hands out ttwid + UIFID_TEMP in one shot;
+// a GET to the same URL returns only __ac_nonce, which is what made this look
+// like TLS-fingerprint discrimination when it is really just the method.
+//
+// A real browser also holds a genuine UIFID, distinct from UIFID_TEMP, minted
+// by ByteDance's obfuscated security SDK — no plain endpoint mints one, so we
+// cannot. Sending the UIFID_TEMP value under BOTH names passes the plugin, but
+// only on the fraction of backends that do not validate UIFID contents: about
+// half of requests still 403. Measured ~50-55% success, and it is per-REQUEST
+// random, not per-cookie-jar — replaying a jar that just worked fails at the
+// same rate, so caching a "good" jar buys nothing and only retrying does.
+// A real browser is deterministic (8/8), so this is a mitigation, not a cure:
+// if Douyin tightens validation everywhere, this stops working and the SDK
+// handshake becomes the only path.
+const DOUYIN_DETAIL_ATTEMPTS = 6;
 
-async function mintTtwid() {
-  const resp = await fetch('https://ttwid.bytedance.com/ttwid/union/register/', {
-    method: 'POST',
-    headers: { 'User-Agent': DESKTOP_UA, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      region: 'cn',
-      aid: 6383,
-      needFid: false,
-      service: 'www.douyin.com',
-      migrate_info: { ticket: '', source: 'node' },
-      cbUrlProtocol: 'https',
-      union: true,
-    }),
+let cachedDouyinCookie = null;
+
+async function mintDouyinCookie() {
+  const resp = await fetch('https://www.douyin.com/video/7631138806736964870', {
+    method: 'HEAD',
+    redirect: 'manual',
+    headers: { 'User-Agent': DESKTOP_UA },
   });
-  const jar = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : [];
-  for (const c of jar) {
-    const m = /^ttwid=([^;]+)/.exec(c.trim());
-    if (m) return m[1];
+  const jar = {};
+  const setCookie = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : [];
+  for (const c of setCookie) {
+    const m = /^([^=]+)=([^;]*)/.exec(c.trim());
+    if (m) jar[m[1]] = m[2];
   }
-  return null;
+  if (!jar.ttwid || !jar.UIFID_TEMP) return null;
+  return `ttwid=${jar.ttwid}; UIFID=${jar.UIFID_TEMP}; UIFID_TEMP=${jar.UIFID_TEMP}`;
 }
 
-async function fetchDouyinDetail(itemId, ttwid) {
+async function fetchDouyinDetail(itemId, cookie) {
   const qs = new URLSearchParams({
     device_platform: 'webapp',
     aid: '6383',
@@ -124,10 +132,10 @@ async function fetchDouyinDetail(itemId, ttwid) {
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh;q=0.9',
       'Referer': `https://www.douyin.com/video/${itemId}`,
-      'Cookie': `ttwid=${ttwid}`,
+      'Cookie': cookie,
     },
   });
-  return resp.text();
+  return { status: resp.status, text: await resp.text() };
 }
 
 // Douyin serves the same video from several CDN families and the mix varies
@@ -175,21 +183,26 @@ async function pickDouyinPlayUrl(urlList) {
 async function parseDouyin(url) {
   // Douyin stopped server-rendering video data into the share page in Aug 2026
   // — _ROUTER_DATA now arrives empty for every video — so the web API is the
-  // only remaining source. It needs a ttwid cookie but no request signature:
-  // the a_bogus parameter every scraping guide adds is not checked here.
+  // only remaining source. It needs ttwid + UIFID cookies, but no request
+  // signature: the a_bogus parameter every scraping guide adds is not checked.
   const itemId = await resolveDouyinItemId(url);
 
-  if (!cachedTtwid) cachedTtwid = await mintTtwid();
-  let text = cachedTtwid ? await fetchDouyinDetail(itemId, cachedTtwid) : '';
-
-  // Douyin signals a rejected ttwid with HTTP 200 and an empty body rather
-  // than an error status. Mint a fresh one and retry once before giving up.
-  if (!text.trim()) {
-    cachedTtwid = await mintTtwid();
-    if (!cachedTtwid) throw new Error('抖音接口鉴权失败（ttwid 获取不到），请稍后再试');
-    text = await fetchDouyinDetail(itemId, cachedTtwid);
+  // Argus accepts our cookie set on only ~half of requests, and rejection is
+  // per-request rather than per-jar, so the retry replays the SAME cookies
+  // instead of re-minting every round. One re-mint partway through covers the
+  // separate case where the jar really has gone stale.
+  let text = '';
+  for (let attempt = 0; attempt < DOUYIN_DETAIL_ATTEMPTS; attempt++) {
+    if (!cachedDouyinCookie || attempt === Math.floor(DOUYIN_DETAIL_ATTEMPTS / 2)) {
+      cachedDouyinCookie = await mintDouyinCookie();
+    }
+    if (!cachedDouyinCookie) continue;
+    const { status, text: body } = await fetchDouyinDetail(itemId, cachedDouyinCookie);
+    // 403 is an Argus rejection; 200-with-empty-body is a stale ttwid. Both are
+    // retryable, and both look identical to the caller, so just try again.
+    if (status === 200 && body.trim()) { text = body; break; }
   }
-  if (!text.trim()) {
+  if (!text) {
     throw new Error('抖音接口未返回数据，可能被风控，请稍后再试');
   }
 
