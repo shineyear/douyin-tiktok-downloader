@@ -97,7 +97,12 @@ async function resolveDouyinItemId(url) {
 // A real browser is deterministic (8/8), so this is a mitigation, not a cure:
 // if Douyin tightens validation everywhere, this stops working and the SDK
 // handshake becomes the only path.
-const DOUYIN_DETAIL_ATTEMPTS = 6;
+// Netlify's egress IP is rejected far harder than a residential one: measured
+// ~50% success from a home connection versus ~0% live from the deployed
+// function, with the same cookies and code. Retrying therefore does not rescue
+// production, so keep the count low — enough to ride out a transient rejection
+// if leniency returns, without hammering an IP that is already being refused.
+const DOUYIN_DETAIL_ATTEMPTS = 3;
 
 let cachedDouyinCookie = null;
 
@@ -192,17 +197,25 @@ async function parseDouyin(url) {
   // instead of re-minting every round. One re-mint partway through covers the
   // separate case where the jar really has gone stale.
   let text = '';
+  let lastStatus = 0;
+  let minted = false;
   for (let attempt = 0; attempt < DOUYIN_DETAIL_ATTEMPTS; attempt++) {
     if (!cachedDouyinCookie || attempt === Math.floor(DOUYIN_DETAIL_ATTEMPTS / 2)) {
       cachedDouyinCookie = await mintDouyinCookie();
     }
     if (!cachedDouyinCookie) continue;
+    minted = true;
     const { status, text: body } = await fetchDouyinDetail(itemId, cachedDouyinCookie);
+    lastStatus = status;
     // 403 is an Argus rejection; 200-with-empty-body is a stale ttwid. Both are
     // retryable, and both look identical to the caller, so just try again.
     if (status === 200 && body.trim()) { text = body; break; }
   }
   if (!text) {
+    // Name the failing stage. Which one it is decides the remedy, and the
+    // deployed function is the only place we can observe it.
+    if (!minted) throw new Error('抖音 Cookie 获取失败（HEAD 未返回 ttwid/UIFID），请稍后再试');
+    if (lastStatus === 403) throw new Error('抖音接口拒绝了服务器请求（Argus 403），请稍后再试');
     throw new Error('抖音接口未返回数据，可能被风控，请稍后再试');
   }
 
