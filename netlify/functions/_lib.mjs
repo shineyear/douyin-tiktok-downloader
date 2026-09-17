@@ -108,6 +108,23 @@ const DOUYIN_RETRY_SPACING_MS = 250;
 
 let cachedDouyinCookie = null;
 
+// Headers.getSetCookie() only exists from Node 19.7 / undici 5.19. netlify.toml
+// pins NODE_VERSION 18, where it is absent and every Set-Cookie collapses into
+// one comma-joined string — so reading it naively yields nothing and the mint
+// looks like the server was refused when it simply was not parsed. Fall back to
+// splitting that folded value: a new cookie begins at a comma followed by
+// `name=`, which `Expires=Thu, 01 Jan ...` never matches.
+function readSetCookies(headers) {
+  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie();
+  const raw = headers.get('set-cookie');
+  if (!raw) return [];
+  return raw.split(/,(?=\s*[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)/);
+}
+
+// Why the mint last failed, for the error message. The deployed function is the
+// only place this is observable, so carry it out rather than needing a redeploy.
+let lastMintDiag = '';
+
 async function mintDouyinCookie() {
   const resp = await fetch('https://www.douyin.com/video/7631138806736964870', {
     method: 'HEAD',
@@ -115,12 +132,16 @@ async function mintDouyinCookie() {
     headers: { 'User-Agent': DESKTOP_UA },
   });
   const jar = {};
-  const setCookie = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : [];
+  const setCookie = readSetCookies(resp.headers);
   for (const c of setCookie) {
-    const m = /^([^=]+)=([^;]*)/.exec(c.trim());
-    if (m) jar[m[1]] = m[2];
+    const m = /^\s*([^=]+)=([^;]*)/.exec(c);
+    if (m) jar[m[1].trim()] = m[2];
   }
-  if (!jar.ttwid || !jar.UIFID_TEMP) return null;
+  if (!jar.ttwid || !jar.UIFID_TEMP) {
+    lastMintDiag = `head=${resp.status} raw=${setCookie.length} names=${Object.keys(jar).join('|') || 'none'} gsc=${typeof resp.headers.getSetCookie === 'function'} node=${process.version}`;
+    return null;
+  }
+  lastMintDiag = '';
   return `ttwid=${jar.ttwid}; UIFID=${jar.UIFID_TEMP}; UIFID_TEMP=${jar.UIFID_TEMP}`;
 }
 
@@ -219,7 +240,7 @@ async function parseDouyin(url) {
   if (!text) {
     // Name the failing stage. Which one it is decides the remedy, and the
     // deployed function is the only place we can observe it.
-    if (!minted) throw new Error('抖音 Cookie 获取失败（HEAD 未返回 ttwid/UIFID），请稍后再试');
+    if (!minted) throw new Error(`抖音 Cookie 获取失败（HEAD 未返回 ttwid/UIFID）[${lastMintDiag}]，请稍后再试`);
     if (lastStatus === 403) throw new Error('抖音接口拒绝了服务器请求（Argus 403），请稍后再试');
     throw new Error('抖音接口未返回数据，可能被风控，请稍后再试');
   }
