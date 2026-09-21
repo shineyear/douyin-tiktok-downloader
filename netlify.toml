@@ -36,8 +36,3 @@
   to = "/.netlify/functions/mcp"
   status = 200
   force = true
-
-# TEMPORARY probe: compare Edge (Deno) egress vs Lambda for Douyin. Remove after.
-[[edge_functions]]
-  path = "/api/dy-egress-probe"
-  function = "dy-egress-probe"
