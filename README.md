@@ -183,11 +183,11 @@ In a Claude Code session (or any client where the MCP is connected), just talk t
 > Download this video for me: https://www.tiktok.com/@9news/video/7283777168503573768
 
 > Save these 3 to ~/videos/:
->   https://v.douyin.com/9zCRrjMtxL8
+>   https://v.douyin.com/OuSt8KHbgHU
 >   https://www.instagram.com/reel/DUuJKDGjvw_/
 >   https://x.com/OpenAI/status/2047376561205325845
 
-> What's the title and platform of https://v.douyin.com/9zCRrjMtxL8 — don't actually download.
+> What's the title and platform of https://v.douyin.com/OuSt8KHbgHU — don't actually download.
 
 > Give me just the direct CDN URL for https://x.com/WhiteHouse/status/2031895801064985021 so I can pipe it into ffmpeg.
 ```
