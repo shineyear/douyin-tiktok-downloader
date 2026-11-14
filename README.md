@@ -2,6 +2,7 @@
 
 [![Deploy Status](https://img.shields.io/badge/status-live-success)](https://digitaldialogue.com.au/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.5.0-informational)](CHANGELOG.md)
 
 A mobile-first web tool that parses a **Douyin (抖音), TikTok, X (Twitter), or Instagram** share link and saves the **watermark-free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign-up, no ads.
 
@@ -38,21 +39,21 @@ Each platform has a public endpoint that hands us the CDN URL without authentica
 
 | Platform | Page host | Resolution path | Final CDN host | CORS | URL lifetime |
 |----------|-----------|-----------------|----------------|------|--------------|
-| Douyin   | `www.douyin.com` | server-side `aweme.snssdk.com/aweme/v1/play/` 302 follow | `*.zjcdn.com` / `*.douyinvod.com` | `*` | ~5 min signed |
+| Douyin   | `www.douyin.com/aweme/v1/web/aweme/detail/` (web API, called with the embed player's `Origin`) | direct MP4 URLs in the JSON response; a mirror the browser can fetch is picked | `*.zjcdn.com` | `*` | ~5 min signed |
 | TikTok   | `www.tiktok.com` | server-side `www.tiktok.com/aweme/v1/play/` 302 follow (cookieless variant) | `*.tiktokcdn-us.com` | `*` | ~5 min signed |
 | X (Twitter) | `cdn.syndication.twimg.com/tweet-result` (oEmbed-style API, no auth) | direct MP4 URL in the JSON response — no 302 | `video.twimg.com` (Cloudflare) | `*` | **1 week** (`max-age=604800`) |
-| Instagram | `instagram.com/graphql/query` (`doc_id=8845758582119845`, csrftoken cookie warmup) | direct MP4 URL in the JSON response | `*.cdninstagram.com` | `*` | ~30 min signed |
+| Instagram | `instagram.com/reel/<shortcode>/` (logged-out page HTML) | direct MP4 URL from the `video_versions` JSON inlined in the page | `*.cdninstagram.com` | `*` | ~30 min signed |
 
-**Douyin**: `aweme.snssdk.com` has no CORS headers so browsers can't follow its 302 from JS. The redirect target does have ACAO `*` and accepts requests with no Referer (CDN rejects cross-origin Referer as anti-hotlink). We do the follow once server-side.
+**Douyin**: share pages no longer carry video data, so we call the web API. It sits behind an anti-bot gate with two lanes. Requests that look like Douyin's own web app need a browser-minted device token; requests from Douyin's **embeddable player** (`open.douyin.com/player/video`, the iframe third-party sites are given) are admitted on their `Origin` alone, because that player calls the API cross-site and cannot carry first-party cookies. We use the second lane: `aweme_id`, `aid`, and `Origin: https://open.douyin.com` — no cookies, no signature. The response lists the same video on several CDN families; `*.douyinvod.com` mirrors demand a `Referer` a browser cannot send, so we prefer the others and confirm the pick with a 1-byte range request.
 
 **TikTok**: same play-redirect endpoint serves *two different Locations* based on whether the request carries `tt_chain_token` cookie. With cookie → `v16-webapp-prime.us.tiktok.com` (cookie-gated, 403 cold). Without cookie → `v16m-default.tiktokcdn-us.com` (signed URL, no header requirements, ACAO `*`). Node fetch has no cookie jar, so the cookieless variant comes back automatically.
 
 **X (Twitter)**: easiest by far. The same `cdn.syndication.twimg.com/tweet-result?id=…` endpoint that powers `publish.twitter.com` returns a JSON with `video.variants[]` listing direct MP4 URLs at multiple resolutions (480p / 720p / 1080p). No 302, no signature, no cookie — just public Cloudflare-cached assets that browsers can `fetch()` directly. We pick the highest resolution.
 
-**Instagram**: most fragile of the four. We POST to `instagram.com/graphql/query/` with `doc_id=8845758582119845` (the same internal doc id Instagram's own embed iframe uses) — the response is JSON with `data.xdt_shortcode_media.video_url` pointing at a `*.cdninstagram.com` signed MP4 (CORS `*`, no header requirements). Three caveats:
+**Instagram**: most fragile of the four. We fetch the logged-out reel page (`instagram.com/reel/<shortcode>/`) with browser-like `Sec-Fetch-*` headers and read the first URL out of the `video_versions` JSON that Instagram inlines into it — a `*.cdninstagram.com` signed MP4 (CORS `*`, no header requirements). Title, owner and cover come from the page's `og:` tags. Three caveats:
 
-1. **IP-level rate limiting on the graphql endpoint.** Shared Netlify IPs get flagged fast — typically the first call works, the next one or two 401 ("require_login") or 429. Both are soft rate-limit signals and we surface them as "请 10-30 分钟后再试". Usually clears within ~30 minutes. Not fixable structurally unless you run on your own IP (VPS) with light traffic, or add per-shortcode caching.
-2. **doc_id rotates every few months.** When the parser starts 400-ing with a `doc_id not found` body, look up the current value at [yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/instagram.py) (search for `doc_id`).
+1. **IP-level rate limiting.** Shared Netlify IPs get flagged fast — typically the first call works and the next one or two are refused. We surface that as "请 10-30 分钟后再试". Usually clears within ~30 minutes. Not fixable structurally unless you run on your own IP (VPS) with light traffic; the JSON cache below is what keeps it usable.
+2. **The page shape can change without notice.** If the parser starts failing, check whether the reel page still inlines `video_versions`. (The graphql `doc_id` route used before v1.4.1 was retired by Instagram.)
 3. **Carousel posts** return the first video child. **Stories / Highlights / private / age-restricted / region-locked** content fails with "未返回视频元数据".
 
 ```
@@ -60,10 +61,10 @@ Browser                  Netlify Function              Platform
 ───────                  ────────────────              ──────────
   │                            │                          │
   ├─ POST /parse ────────────> │                          │
-  │                            ├─ extract video URL       │  Douyin/TikTok: page+302
-  │                            │  (per-platform path) ──> │  Twitter:   syndication API
-  │                            │                          │  Instagram: graphql doc_id
-  │<── { direct_cdn_url, … } ──│                          │
+  │                            ├─ extract video URL       │  Douyin:    web API (embed Origin)
+  │                            │  (per-platform path) ──> │  TikTok:    page + 302
+  │                            │                          │  Twitter:   syndication API
+  │<── { direct_cdn_url, … } ──│                          │  Instagram: reel page HTML
   │                                                       │
   ├─ GET direct_cdn_url (no Referer, no cookies) ──────> │
   │<── MP4 bytes ←─ 2-15 MB straight from platform CDN ──│
@@ -215,7 +216,7 @@ $ curl https://digitaldialogue.com.au/mcp
 {
   "name": "digitaldialogue",
   "title": "Douyin / TikTok / X / Instagram Video Downloader",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "protocol": "mcp-streamable-http",
   "protocol_version": "2025-06-18",
   "transport": "POST application/json (JSON-RPC 2.0); single endpoint",
@@ -292,9 +293,10 @@ Drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop) — Ne
 
 - **Prefetch the full MP4 on parse, not on save click.** `navigator.share()` requires transient user activation (~5s from click). Awaiting a multi-MB download inside the click handler blows past that window and Safari throws `NotAllowedError`. Prefetching means the save click calls `share()` synchronously.
 - **`referrerPolicy: 'no-referrer'` everywhere (for Douyin / TikTok).** Both platforms' CDN anti-hotlink filters accept a request with no Referer but 403 any cross-origin one. We set the policy on the prefetch `fetch()` and use a 302 for the Shortcut endpoint (HTTP clients don't add Referer when following 302s). Twitter's `video.twimg.com` doesn't care about Referer, but the policy is harmless.
-- **Server-resolve the play-redirect 302.** The redirect endpoints (Douyin: `aweme.snssdk.com`; TikTok: `www.tiktok.com/aweme/v1/play/`) either lack CORS headers or serve different Locations based on cookies, so the browser can't reliably follow them. We do the follow once server-side and hand the resulting cookieless CDN URL to the client. Twitter skips this step — `cdn.syndication.twimg.com/tweet-result` returns the final CDN URL directly in JSON.
-- **Per-platform User-Agent.** TikTok, Twitter syndication, and Instagram graphql all 403 mobile UAs and need desktop Chrome. Douyin is the opposite — its mobile-share endpoint expects an iPhone Safari UA.
-- **Instagram is "best effort".** Unlike the other three platforms which have stable public APIs, IG's graphql endpoint is rate-limited per IP and rotates the `doc_id` periodically. When the parser breaks, check yt-dlp for the new value. Public posts/reels work; private accounts, age-restricted, region-locked, and Stories don't.
+- **Server-resolve TikTok's play-redirect 302.** `www.tiktok.com/aweme/v1/play/` serves different Locations depending on cookies, so the browser can't reliably follow it. We do the follow once server-side and hand the resulting cookieless CDN URL to the client. Douyin and Twitter skip this step — their APIs return final CDN URLs directly in JSON.
+- **Reach Douyin's API the way its embed player does.** Imitating Douyin's first-party web app (minted cookies, device tokens) broke four times in three months as the anti-bot gate changed. The embed player's lane needs one header, `Origin: https://open.douyin.com`, and has nothing to expire.
+- **Per-platform User-Agent.** TikTok, Twitter syndication, and Instagram all 403 mobile UAs and need desktop Chrome. Douyin's short-link redirect is fetched with an iPhone Safari UA; its API doesn't care.
+- **Instagram is "best effort".** Unlike the other three platforms, IG has no stable public API: the reel page is rate-limited per IP and its inlined JSON can change shape. Public posts/reels work; private accounts, age-restricted, region-locked, and Stories don't.
 
 ## License
 

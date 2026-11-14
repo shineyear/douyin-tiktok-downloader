@@ -16,7 +16,7 @@ const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INFO = {
   name: 'digitaldialogue',
   title: 'Douyin / TikTok / X / Instagram Video Downloader',
-  version: '1.0.0',
+  version: '1.5.0',
 };
 const CAPABILITIES = { tools: {} };
 

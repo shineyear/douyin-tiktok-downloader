@@ -8,7 +8,7 @@
 // enough, because a browser cannot set Referer (it is a forbidden header).
 //
 // How each platform gets there differs, and drifts as platforms change:
-//   Douyin  -> web API (/aweme/v1/web/aweme/detail/) + self-minted ttwid/UIFID
+//   Douyin  -> web API (/aweme/v1/web/aweme/detail/) via the embed player's Origin
 //   TikTok  -> page scrape, then its aweme/v1/play 302 followed WITHOUT cookies
 //   Twitter -> cdn.syndication.twimg.com, no auth and no redirect
 //   Instagram -> logged-out reel page HTML, scraped for inlined video_versions
@@ -79,88 +79,41 @@ async function resolveDouyinItemId(url) {
   throw new Error('无法从链接解析出抖音视频 ID');
 }
 
-// Douyin's web API is gated by ByteDance's "Argus" plugin, which as of
-// Sep 2026 rejects requests with 403 `Uifid Not Found` unless a UIFID cookie
-// is present alongside ttwid.
+// Douyin's web API sits behind ByteDance's "Argus" plugin, and it has two lanes.
 //
-// A HEAD (not GET) to any video page hands out ttwid + UIFID_TEMP in one shot;
-// a GET to the same URL returns only __ac_nonce, which is what made this look
-// like TLS-fingerprint discrimination when it is really just the method.
+// The first-party lane (requests that look like www.douyin.com's own web app)
+// wants a UIFID minted by their obfuscated security SDK. We imitated it with
+// cookies from a HEAD request; that flipped between working, half-working and
+// dead four times in three months, and is why this function kept breaking.
 //
-// A real browser also holds a genuine UIFID, distinct from UIFID_TEMP, minted
-// by ByteDance's obfuscated security SDK — no plain endpoint mints one, so we
-// cannot. Sending the UIFID_TEMP value under BOTH names passes the plugin, but
-// only on the fraction of backends that do not validate UIFID contents: about
-// half of requests still 403. Measured ~50-55% success, and it is per-REQUEST
-// random, not per-cookie-jar — replaying a jar that just worked fails at the
-// same rate, so caching a "good" jar buys nothing and only retrying does.
-// A real browser is deterministic (8/8), so this is a mitigation, not a cure:
-// if Douyin tightens validation everywhere, this stops working and the SDK
-// handshake becomes the only path.
-// Retry count is a balance against Douyin's burst rate limiting. Roughly half
-// of individual requests are refused, so a few attempts are needed — but
-// retries are also what trips the limiter: firing ~60 calls in quick
-// succession from one IP got that IP refused for several minutes, which is
-// easy to misread as the IP being permanently blocked. Keep the count modest
-// and space the attempts out.
-const DOUYIN_DETAIL_ATTEMPTS = 4;
-const DOUYIN_RETRY_SPACING_MS = 250;
+// The embed lane is the one Douyin's own embeddable player uses
+// (open.douyin.com/player/video, the iframe third-party sites are given). The
+// player calls this same endpoint cross-site, so it cannot carry first-party
+// cookies, and Argus admits it on its Origin. Established by capturing the
+// player's request and replaying it from plain Node, removing one ingredient
+// at a time:
+//
+//   Origin: https://open.douyin.com    required   (Referer alone -> 403)
+//   Cookie (ttwid, UIFID, ...)         the player sends none; not needed
+//   X-Bogus, _signature, msToken       the player sends them; not checked
+//   User-Agent                         irrelevant
+//
+// So the request is two query params and one header: nothing to mint, nothing
+// to cache, and no retry roulette (20/20 on one video, 14/14 across others).
+//
+// If this stops working, capture the embed player's request again and repeat
+// the drop-one test before assuming a signature or a session is now needed.
+const DOUYIN_EMBED_ORIGIN = 'https://open.douyin.com';
 
-let cachedDouyinCookie = null;
-
-// Headers.getSetCookie() only exists from Node 19.7 / undici 5.19. netlify.toml
-// pins NODE_VERSION 18, where it is absent and every Set-Cookie collapses into
-// one comma-joined string — so reading it naively yields nothing and the mint
-// looks like the server was refused when it simply was not parsed. Fall back to
-// splitting that folded value: a new cookie begins at a comma followed by
-// `name=`, which `Expires=Thu, 01 Jan ...` never matches.
-function readSetCookies(headers) {
-  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie();
-  const raw = headers.get('set-cookie');
-  if (!raw) return [];
-  return raw.split(/,(?=\s*[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)/);
-}
-
-// Why the mint last failed, for the error message. The deployed function is the
-// only place this is observable, so carry it out rather than needing a redeploy.
-let lastMintDiag = '';
-
-async function mintDouyinCookie() {
-  const resp = await fetch('https://www.douyin.com/video/7631138806736964870', {
-    method: 'HEAD',
-    redirect: 'manual',
-    headers: { 'User-Agent': DESKTOP_UA },
-  });
-  const jar = {};
-  const setCookie = readSetCookies(resp.headers);
-  for (const c of setCookie) {
-    const m = /^\s*([^=]+)=([^;]*)/.exec(c);
-    if (m) jar[m[1].trim()] = m[2];
-  }
-  if (!jar.ttwid || !jar.UIFID_TEMP) {
-    lastMintDiag = `head=${resp.status} raw=${setCookie.length} names=${Object.keys(jar).join('|') || 'none'} gsc=${typeof resp.headers.getSetCookie === 'function'} node=${process.version}`;
-    return null;
-  }
-  lastMintDiag = '';
-  return `ttwid=${jar.ttwid}; UIFID=${jar.UIFID_TEMP}; UIFID_TEMP=${jar.UIFID_TEMP}`;
-}
-
-async function fetchDouyinDetail(itemId, cookie) {
-  const qs = new URLSearchParams({
-    device_platform: 'webapp',
-    aid: '6383',
-    aweme_id: itemId,
-    version_code: '190500',
-    version_name: '19.5.0',
-  }).toString();
-
+async function fetchDouyinDetail(itemId) {
+  const qs = new URLSearchParams({ aweme_id: itemId, aid: '6383' }).toString();
   const resp = await fetch(`https://www.douyin.com/aweme/v1/web/aweme/detail/?${qs}`, {
     headers: {
       'User-Agent': DESKTOP_UA,
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh;q=0.9',
-      'Referer': `https://www.douyin.com/video/${itemId}`,
-      'Cookie': cookie,
+      'Origin': DOUYIN_EMBED_ORIGIN,
+      'Referer': `${DOUYIN_EMBED_ORIGIN}/`,
     },
   });
   return { status: resp.status, text: await resp.text() };
@@ -211,38 +164,22 @@ async function pickDouyinPlayUrl(urlList) {
 async function parseDouyin(url) {
   // Douyin stopped server-rendering video data into the share page in Aug 2026
   // — _ROUTER_DATA now arrives empty for every video — so the web API is the
-  // only remaining source. It needs ttwid + UIFID cookies, but no request
-  // signature: the a_bogus parameter every scraping guide adds is not checked.
+  // only remaining source. See the note above fetchDouyinDetail for how we are
+  // admitted to it.
   const itemId = await resolveDouyinItemId(url);
 
-  // Argus accepts our cookie set on only ~half of requests, and rejection is
-  // per-request rather than per-jar, so the retry replays the SAME cookies
-  // instead of re-minting every round. One re-mint partway through covers the
-  // separate case where the jar really has gone stale.
-  let text = '';
-  let lastStatus = 0;
-  let minted = false;
-  for (let attempt = 0; attempt < DOUYIN_DETAIL_ATTEMPTS; attempt++) {
-    if (!cachedDouyinCookie || attempt === Math.floor(DOUYIN_DETAIL_ATTEMPTS / 2)) {
-      cachedDouyinCookie = await mintDouyinCookie();
-    }
-    if (!cachedDouyinCookie) continue;
-    minted = true;
-    const { status, text: body } = await fetchDouyinDetail(itemId, cachedDouyinCookie);
-    lastStatus = status;
-    // 403 is an Argus rejection; 200-with-empty-body is a stale ttwid. Both are
-    // retryable, and both look identical to the caller, so just try again.
-    if (status === 200 && body.trim()) { text = body; break; }
-    if (attempt < DOUYIN_DETAIL_ATTEMPTS - 1) {
-      await new Promise((r) => setTimeout(r, DOUYIN_RETRY_SPACING_MS));
-    }
+  // One retry, for an ordinary transient failure. The embed lane is
+  // deterministic, so a second refusal is a real answer, not bad luck.
+  let { status, text } = await fetchDouyinDetail(itemId);
+  if (status !== 200 || !text.trim()) {
+    await new Promise((r) => setTimeout(r, 400));
+    ({ status, text } = await fetchDouyinDetail(itemId));
   }
-  if (!text) {
-    // Name the failing stage. Which one it is decides the remedy, and the
-    // deployed function is the only place we can observe it.
-    if (!minted) throw new Error(`抖音 Cookie 获取失败（HEAD 未返回 ttwid/UIFID）[${lastMintDiag}]，请稍后再试`);
-    if (lastStatus === 403) throw new Error('抖音接口拒绝了服务器请求（Argus 403），请稍后再试');
-    throw new Error('抖音接口未返回数据，可能被风控，请稍后再试');
+  if (status !== 200 || !text.trim()) {
+    // Carry the raw status out: the deployed function is the only place this
+    // is observable, and "HTTP 403" vs "empty 200" point at different causes.
+    const what = status === 200 ? 'HTTP 200 空响应' : `HTTP ${status}`;
+    throw new Error(`抖音接口拒绝了请求（${what}），请稍后再试`);
   }
 
   let payload;
