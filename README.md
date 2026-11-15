@@ -2,7 +2,7 @@
 
 [![Deploy Status](https://img.shields.io/badge/status-live-success)](https://digitaldialogue.com.au/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.5.0-informational)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.1-informational)](CHANGELOG.md)
 
 A mobile-first web tool that parses a **Douyin (抖音), TikTok, X (Twitter), or Instagram** share link and saves the **watermark-free MP4** straight into your iPhone **Camera Roll** via the native iOS Share Sheet — no app to install, no sign-up, no ads.
 
@@ -216,7 +216,7 @@ $ curl https://digitaldialogue.com.au/mcp
 {
   "name": "digitaldialogue",
   "title": "Douyin / TikTok / X / Instagram Video Downloader",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "protocol": "mcp-streamable-http",
   "protocol_version": "2025-06-18",
   "transport": "POST application/json (JSON-RPC 2.0); single endpoint",

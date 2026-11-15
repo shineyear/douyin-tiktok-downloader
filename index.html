@@ -74,7 +74,9 @@
     .sub { font-size: 13px; color: #888; text-align: center; margin: 0 0 20px; line-height: 1.5; }
     textarea {
       width: 100%;
-      min-height: 96px;
+      /* Fallback only: fitInput() sets the real height from the text. 170px is
+         the six-line placeholder on a screen wide enough not to wrap it. */
+      min-height: 170px;
       padding: 12px 14px;
       border-radius: 10px;
       border: 1px solid #2a2a2a;
@@ -89,6 +91,17 @@
       font-family: inherit;
     }
     textarea:focus { outline: none; border-color: #ff0050; }
+    /* Off-screen twin of the input, used only to measure text — see fitInput(). */
+    textarea.sizer {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      height: 0;
+      min-height: 0;
+      visibility: hidden;
+      overflow: hidden;
+      pointer-events: none;
+    }
     .row { display: flex; gap: 8px; margin-top: 12px; }
     .row button { flex: 1; }
     button {
@@ -235,7 +248,7 @@
 
   <footer class="credit">
     Made by <a href="https://landfirst.ai" target="_blank" rel="noopener">LandFirst.ai</a>
-    · <a href="https://github.com/shineyear/douyin-tiktok-downloader/blob/main/CHANGELOG.md" target="_blank" rel="noopener" id="app-version">v1.5.0</a>
+    · <a href="https://github.com/shineyear/douyin-tiktok-downloader/blob/main/CHANGELOG.md" target="_blank" rel="noopener" id="app-version">v1.5.1</a>
   </footer>
 
 <script>
@@ -436,6 +449,35 @@
       link.dataset.i18nLink = '1';
       document.head.appendChild(link);
     });
+
+    fitInput();
+  }
+
+  // The input box is as tall as what it holds: the whole placeholder when
+  // empty (four example links, which wrap differently per language and screen
+  // width), and the whole pasted text once there is some — up to half the
+  // screen, after which it scrolls. It never gets shorter than the placeholder,
+  // so the buttons below do not jump when a short link is pasted.
+  // An off-screen twin does the measuring, so the box being typed in is only
+  // ever given a height.
+  let sizer = null;
+  function fitInput() {
+    const box = document.getElementById('input');
+    if (!sizer) {
+      sizer = document.createElement('textarea');
+      sizer.className = 'sizer';
+      sizer.readOnly = true;
+      sizer.tabIndex = -1;
+      sizer.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(sizer);
+    }
+    const border = box.offsetHeight - box.clientHeight;
+    sizer.style.width = box.offsetWidth + 'px';
+    const heightOf = (text) => { sizer.value = text; return sizer.scrollHeight + border; };
+    const empty = heightOf(box.placeholder);
+    const cap = Math.round(window.innerHeight * 0.5);
+    const filled = box.value ? Math.min(heightOf(box.value), cap) : 0;
+    box.style.height = Math.max(empty, filled) + 'px';
   }
 
   // Cycles zh → en → ja → es → zh. Label always shows CURRENT language;
@@ -465,8 +507,15 @@
     videoState = { file: null, error: null, blobUrl: null };
   }
 
+  input.addEventListener('input', fitInput);
+  window.addEventListener('resize', fitInput);
+  // pageshow: the browser may restore a previously typed value after this
+  // script has run (reload, back/forward cache).
+  window.addEventListener('pageshow', fitInput);
+
   clearBtn.onclick = () => {
     input.value = '';
+    fitInput();
     result.innerHTML = '';
     resetVideoState();
     input.focus();

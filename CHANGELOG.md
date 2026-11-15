@@ -5,6 +5,15 @@ All notable changes to this project are documented here. Versions follow
 before 1.5.0 were reconstructed from the git history and the original release
 notes when this file was introduced.
 
+## [1.5.1] - 2026-11-14
+
+### Changed
+- The input box now shows its whole placeholder — all four example links —
+  instead of the first three lines. Its height is measured from the text, so
+  it is right in every language and on narrow screens where the links wrap.
+- Pasted text longer than the placeholder makes the box grow, up to half the
+  screen, then it scrolls.
+
 ## [1.5.0] - 2026-11-14
 
 ### Fixed
